@@ -199,6 +199,7 @@ const MODULES=[
   {key:'rep_daily',name:'التقرير المالي اليومي',acts:['view']},
   {key:'rep_admin',name:'تقارير الإدارة',acts:['view']},
   {key:'partners',name:'جاري الشركاء (المسحوبات)',acts:['view','add','edit','delete']},
+  {key:'adjust',name:'إيرادات ومصروفات إدارية (برا اليومية)',acts:['view','add','edit','delete']},
   {key:'settings',name:'الإعدادات (الباقات والكباتن والأنواع)',acts:['view','edit']},
   {key:'users',name:'المستخدمين والصلاحيات',acts:['view','edit']},
   {key:'audit',name:'سجل الحركات',acts:['view']},
@@ -244,7 +245,7 @@ function migrate(){
   DB.subs.forEach(s=>{if(String(s.unit).includes(',')){s.unit=String(s.unit).split(',')[0];s.end=endOf(s.start,s.len,s.unit);}});
   DB.plans.forEach(p=>{if(String(p.unit).includes(',')) p.unit=String(p.unit).split(',')[0];});
   DB.payments.forEach(p=>{if(p.method==='فودافون كاش') p.method='إنستاباي';});
-  if(!DB.partners) DB.partners=[]; if(!DB.withdrawals) DB.withdrawals=[]; if(!DB.audit) DB.audit=[];
+  if(!DB.partners) DB.partners=[]; if(!DB.withdrawals) DB.withdrawals=[]; if(!DB.audit) DB.audit=[]; if(!DB.adjustments) DB.adjustments=[];
   DB.partners=DB.partners.map(p=>typeof p==='string'?{id:uid(),name:p,phone:'',share:'',note:''}:p);
   DB.withdrawals.forEach(w=>{if(!w.partnerId&&w.partner){let p=DB.partners.find(x=>x.name===w.partner);if(!p){p={id:uid(),name:w.partner,phone:'',share:'',note:''};DB.partners.push(p)}w.partnerId=p.id;delete w.partner;}});
   DB.roles.forEach(r=>{if(r.perms.rep_fin){delete r.perms.rep_fin;r.perms.rep_daily=['view'];r.perms.rep_admin=['view'];r.perms.partners=['view','add'];}});
@@ -252,7 +253,7 @@ function migrate(){
   
 }
 /* ---- مزامنة Firebase ---- */
-const COLS=['members','subs','payments','attendance','expenses','withdrawals','audit'];
+const COLS=['members','subs','payments','attendance','expenses','withdrawals','adjustments','audit'];
 const CFG_KEYS=['settings','roles','plans','trainers','activities','expenseCats','partners','demo'];
 let SYNC={}, CFG_SYNC={}, SHARDS={}, STATE='loading', AUTH_MSG='', PENDING_RENDER=false, USERS_ALL=[];
 COLS.forEach(c=>SYNC[c]=new Map());
@@ -261,13 +262,13 @@ function shardOf(col,o){
   switch(col){
     case 'members': return 'members_'+(hash(o.id)%4);
     case 'subs': return 'subs_'+String(o.start||'0000').slice(0,4);
-    case 'withdrawals': return 'withdrawals_'+String(o.date||'0000').slice(0,4);
+    case 'adjustments': case 'withdrawals': return col+'_'+String(o.date||'0000').slice(0,4);
     case 'audit': {const d=String(o.at||'0000-00-00').slice(0,10);return 'audit_'+d.slice(0,7)+(+d.slice(8,10)<=15?'a':'b');}
     default: return col+'_'+String(o.date||'0000-00').slice(0,7);
   }
 }
 function emptyDB(gymName){
-  const d=seed(); Object.assign(d,{demo:false,users:[],trainers:[],partners:[],members:[],subs:[],payments:[],attendance:[],expenses:[],withdrawals:[],audit:[]});
+  const d=seed(); Object.assign(d,{demo:false,users:[],trainers:[],partners:[],members:[],subs:[],payments:[],attendance:[],expenses:[],withdrawals:[],adjustments:[],audit:[]});
   d.plans=d.plans.filter(p=>!p.activity); d.settings.nextCode=1001; if(gymName) d.settings.gymName=gymName; return d;
 }
 function cfgOf(d){const o={};CFG_KEYS.forEach(k=>o[k]=d[k]??null);return o}
@@ -369,7 +370,7 @@ function seed(){
     activities:['حديد','كارديو','كروس فت','لياقة بدنية','ملاكمة'],
     expenseCats:['إيجار','مرتبات','كهرباء','مياه','نثريات','صيانة','أدوات ونظافة'],
     partners:[{id:'pa1',name:'الشريك الأول',phone:'',share:'50',note:''},{id:'pa2',name:'الشريك التاني',phone:'',share:'50',note:''}],
-    members:[],subs:[],payments:[],attendance:[],expenses:[],withdrawals:[],audit:[]
+    members:[],subs:[],payments:[],attendance:[],expenses:[],withdrawals:[],adjustments:[],audit:[]
   };
   const sample=[
     ['محمد عبد الرحمن','01012345678','p2',-40,'t1','حديد',1000],
@@ -415,7 +416,11 @@ const subPaid=sid=>sum(DB.payments.filter(p=>p.subId===sid).map(p=>p.amount));
 const subLeft=s=>Math.max(0,(+s.total||0)-subPaid(s.id));
 const memberBalance=mid=>sum(memberSubs(mid).map(subLeft));
 function currentSub(mid){const t=today(),subs=memberSubs(mid);return subs.find(s=>s.start<=t&&s.end>=t)||subs.find(s=>s.start>t)||subs[0]||null}
-function subStatus(s){ if(!s) return 'none'; const t=today(); if(s.start>t) return 'upcoming'; if(s.end<t) return 'expired'; return dBetween(t,s.end)<=7?'ending':'active'; }
+function subWinEnd(s){const nx=DB.subs.filter(x=>x.memberId===s.memberId&&x.id!==s.id&&x.start>s.start).map(x=>x.start).sort()[0];return nx&&addDays(nx,-1)<s.end?addDays(nx,-1):s.end}
+function subUsed(s){if(!s) return 0;const we=subWinEnd(s);return (+s.usedBefore||0)+DB.attendance.filter(a=>a.memberId===s.memberId&&a.date>=s.start&&a.date<=we).length}
+function subSessLeft(s){return s&&+s.sessions>0?Math.max(0,+s.sessions-subUsed(s)):null}
+function subStatus(s){ if(!s) return 'none'; const t=today(); if(s.start>t) return 'upcoming'; if(s.end<t) return 'expired'; const sl=subSessLeft(s); if(sl!==null&&sl<=0) return 'expired'; return (dBetween(t,s.end)<=7||(sl!==null&&sl<=2))?'ending':'active'; }
+const sessTxt=s=>+s.sessions>0?`${subUsed(s)} من ${s.sessions}`:'مفتوح';
 function chip(st){return {active:'<span class="chip ok">ساري</span>',ending:'<span class="chip warn">قرب يخلص</span>',expired:'<span class="chip bad">منتهي</span>',upcoming:'<span class="chip acc">لسه مبدأش</span>',none:'<span class="chip">مفيش اشتراك</span>'}[st]}
 
 /* ============ واجهة عامة ============ */
@@ -580,8 +585,8 @@ function drawMembers(){
   if(F.ms==='owe') list=list.filter(x=>x.bal>0);
   else if(F.ms!=='all') list=list.filter(x=>x.st===F.ms);
   list.sort((a,b)=>(+a.m.code)-(+b.m.code));
-  const heads=['#الكود','الاسم','الموبايل','بيتمرن','الكابتن','#نهاية الاشتراك','الحالة'].concat(can('money')?['#الباقي عليه']:[]);
-  $('#mt').innerHTML=table('tMem',heads,list.map(({m,s,bal,st})=>`<tr class="click" onclick="go('member','${m.id}')"><td class="num">${esc(m.code)}</td><td>${esc(m.name)}</td><td class="num">${esc(m.phone)}</td><td>${esc(s?.activity||'—')}</td><td>${esc(s?trainerName(s.trainerId):'—')}</td><td class="num">${dshow(s?.end)}</td><td>${chip(st)}</td>${can('money')?`<td class="num">${bal>0?`<b style="color:var(--bad)">${fmt(bal)}</b>`:'0'}</td>`:''}</tr>`),{empty:'مفيش أعضاء بالشروط دي'})+`<p class="muted" style="margin:6px 0 0">${list.length} عضو</p>`;
+  const heads=['#الكود','الاسم','الموبايل','بيتمرن','الكابتن','#نهاية الاشتراك','#حصص فاضلة','الحالة'].concat(can('money')?['#الباقي عليه']:[]);
+  $('#mt').innerHTML=table('tMem',heads,list.map(({m,s,bal,st})=>`<tr class="click" onclick="go('member','${m.id}')"><td class="num">${esc(m.code)}</td><td>${esc(m.name)}</td><td class="num">${esc(m.phone)}</td><td>${esc(s?.activity||'—')}</td><td>${esc(s?trainerName(s.trainerId):'—')}</td><td class="num">${dshow(s?.end)}</td><td class="num">${s&&+s.sessions>0?subSessLeft(s):'—'}</td><td>${chip(st)}</td>${can('money')?`<td class="num">${bal>0?`<b style="color:var(--bad)">${fmt(bal)}</b>`:'0'}</td>`:''}</tr>`),{empty:'مفيش أعضاء بالشروط دي'})+`<p class="muted" style="margin:6px 0 0">${list.length} عضو</p>`;
 }
 function memberForm(id){
   const m=id?memberById(id):null;
@@ -591,6 +596,7 @@ function memberForm(id){
     ${fld('الاسم',`<input name="name" value="${esc(v.name)}" required>`)}
     ${fld('رقم الموبايل',`<input name="phone" value="${esc(v.phone)}" required inputmode="tel">`)}
     ${fld('النوع',`<select name="gender">${opts(['ذكر','أنثى'],v.gender)}</select>`)}
+    ${m?'':fld('هيتمرن إيه',`<select name="activity">${opts(DB.activities,DB.activities[0])}</select>`)}
     ${fld('ملاحظات',`<input name="notes" value="${esc(v.notes)}">`,true)}
   </div>`,fd=>{
     fd.code=fd.code.trim();fd.name=fd.name.trim();fd.phone=fd.phone.trim();
@@ -598,10 +604,10 @@ function memberForm(id){
     if(DB.members.some(x=>x.code===fd.code&&x.id!==id)) return 'الكود ده متسجل لعضو تاني';
     if(DB.members.some(x=>x.phone===fd.phone&&x.id!==id)) return 'رقم الموبايل ده متسجل لعضو تاني';
     if(m){Object.assign(m,fd);commit('تعديل عضو',`${fd.name} (${fd.code})`);toast('اتحفظت التعديلات');return;}
-    const nm={id:uid(),...fd,createdAt:today()};DB.members.push(nm);
+    const {activity:_a,...fdm}=fd;const nm={id:uid(),...fdm,createdAt:today()};DB.members.push(nm);
     if(+fd.code>=DB.settings.nextCode) DB.settings.nextCode=+fd.code+1;
     log('إضافة عضو',`${fd.name} (${fd.code})`);save();
-    setTimeout(()=>{go('member',nm.id);if(can('subs','add')) subForm(nm.id);},0);
+    const act=fd.activity;setTimeout(()=>{go('member',nm.id);if(can('subs','add')) subForm(nm.id,null,act);},0);
   },m?'حفظ':'حفظ وافتح الاشتراك');
 }
 function delMember(id){
@@ -634,7 +640,7 @@ function vMember(id){
      ${can('members','delete')?`<button class="btn sm danger" onclick="delMember('${id}')">مسح العضو</button>`:''}
    </div></div></div>`;
   if(cur&&can('subs')){
-    const left=st==='expired'?0:dBetween(t,cur.end)+(cur.start>t?0:0);
+    const left=cur.end<t?0:dBetween(t,cur.end)+(cur.start>t?0:0);
     h+=`<div class="card"><h2>الاشتراك الحالي</h2><div class="kv">
       <div><span>الباقة</span><b>${esc(cur.planName||'مخصص')}</b></div>
       <div><span>بيتمرن إيه</span><b>${esc(cur.activity||'—')}</b></div>
@@ -642,14 +648,15 @@ function vMember(id){
       <div><span>المدة</span><b>${cur.len} ${cur.unit==='d'?'يوم':'شهر'}</b></div>
       <div><span>تاريخ البداية</span><b>${dshow(cur.start)}</b></div>
       <div><span>تاريخ النهاية</span><b>${dshow(cur.end)}</b></div>
-      <div><span>فاضل</span><b class="${st==='expired'?'bad':''}">${st==='expired'?'خلص من '+dBetween(cur.end,t)+' يوم':left+' يوم'}</b></div>
-      <div><span>أيام الحضور في الاشتراك ده</span><b>${curAtt} يوم</b></div>
+      <div><span>فاضل (أيام)</span><b class="${cur.end<t?'bad':''}">${cur.end<t?'خلص من '+dBetween(cur.end,t)+' يوم':left+' يوم'}</b></div>
+      <div><span>الحصص (حضر من إجمالي)</span><b>${sessTxt(cur)}</b></div>
+      ${+cur.sessions>0?`<div><span>فاضل حصص</span><b class="${subSessLeft(cur)<=0?'bad':subSessLeft(cur)<=2?'':'ok'}">${subSessLeft(cur)<=0?'خلصت الحصص':subSessLeft(cur)+' حصة'}</b></div>`:`<div><span>أيام الحضور في الاشتراك ده</span><b>${curAtt} يوم</b></div>`}
       ${can('money')?`<div><span>قيمة الاشتراك</span><b>${money(cur.total)}</b></div><div><span>المدفوع</span><b class="ok">${money(subPaid(cur.id))}</b></div><div><span>الباقي عليه</span><b class="${subLeft(cur)>0?'bad':''}">${money(subLeft(cur))}</b></div>`:''}
     </div>${can('money')&&bal>subLeft(cur)?`<p class="muted" style="margin:0">إجمالي الباقي عليه من كل الاشتراكات: <b style="color:var(--bad)">${money(bal)}</b></p>`:''}</div>`;
   }
   if(can('subs')){
-    const heads=['الباقة','بيتمرن','الكابتن','#من','#إلى','الحالة'].concat(can('money')?['#القيمة','#المدفوع','#الباقي']:[]).concat(['']);
-    h+=`<div class="tblbox"><div class="row between"><h2>الاشتراكات (${subs.length})</h2>${copyBtn('tSubs')}</div>${table('tSubs',heads,subs.map(s=>`<tr><td>${esc(s.planName||'مخصص')}</td><td>${esc(s.activity)}</td><td>${esc(trainerName(s.trainerId))}</td><td class="num">${dshow(s.start)}</td><td class="num">${dshow(s.end)}</td><td>${chip(subStatus(s))}</td>${can('money')?`<td class="num">${fmt(s.total)}</td><td class="num">${fmt(subPaid(s.id))}</td><td class="num">${subLeft(s)>0?`<b style="color:var(--bad)">${fmt(subLeft(s))}</b>`:'0'}</td>`:''}<td>${can('subs','edit')?`<button class="btn sm" onclick="subForm('${id}','${s.id}')">تعديل</button>`:''} ${can('subs','delete')?`<button class="btn sm danger" onclick="delSub('${s.id}')">مسح</button>`:''}</td></tr>`),{empty:'مفيش اشتراكات'})}</div>`;
+    const heads=['الباقة','بيتمرن','الكابتن','#من','#إلى','#الحصص','الحالة'].concat(can('money')?['#القيمة','#المدفوع','#الباقي']:[]).concat(['']);
+    h+=`<div class="tblbox"><div class="row between"><h2>الاشتراكات (${subs.length})</h2>${copyBtn('tSubs')}</div>${table('tSubs',heads,subs.map(s=>`<tr><td>${esc(s.planName||'مخصص')}</td><td>${esc(s.activity)}</td><td>${esc(trainerName(s.trainerId))}</td><td class="num">${dshow(s.start)}</td><td class="num">${dshow(s.end)}</td><td class="num">${sessTxt(s)}</td><td>${chip(subStatus(s))}</td>${can('money')?`<td class="num">${fmt(s.total)}</td><td class="num">${fmt(subPaid(s.id))}</td><td class="num">${subLeft(s)>0?`<b style="color:var(--bad)">${fmt(subLeft(s))}</b>`:'0'}</td>`:''}<td>${can('subs','edit')?`<button class="btn sm" onclick="subForm('${id}','${s.id}')">تعديل</button>`:''} ${can('subs','delete')?`<button class="btn sm danger" onclick="delSub('${s.id}')">مسح</button>`:''}</td></tr>`),{empty:'مفيش اشتراكات'})}</div>`;
   }
   if(can('payments')&&can('money')){
     h+=`<div class="tblbox"><div class="row between"><h2>الدفعات (${pays.length})</h2>${copyBtn('tPays')}</div>${table('tPays',['#التاريخ','#المبلغ','الطريقة','للاشتراك','سجّلها','ملاحظات',''],pays.map(p=>{const s=DB.subs.find(x=>x.id===p.subId);return `<tr><td class="num">${dshow(p.date)}</td><td class="num">${fmt(p.amount)}</td><td>${esc(p.method)}</td><td>${esc(s?(s.planName+' · '+dshow(s.start)):'—')}</td><td>${esc(p.by)}</td><td>${esc(p.note)}</td><td>${can('payments','delete')?`<button class="btn sm danger" onclick="delPay('${p.id}')">مسح</button>`:''}</td></tr>`}),{empty:'مفيش دفعات',foot:['الإجمالي',fmt(sum(pays.map(p=>p.amount))),'','','','','']})}</div>`;
@@ -663,20 +670,24 @@ function checkIn(mid){
   const m=memberById(mid),t=today();
   const ex=DB.attendance.find(a=>a.memberId===mid&&a.date===t);
   if(ex) return toast(`${m.name} متسجل حضوره النهارده الساعة ${ex.time}`);
+  const c0=currentSub(mid),sl0=subSessLeft(c0);
   DB.attendance.push({id:uid(),memberId:mid,date:t,time:nowTime(),by:ME.name});
   const st=subStatus(currentSub(mid));
   commit('تسجيل حضور',`${m.name} (${m.code})`);
+  const sl=subSessLeft(c0);
+  if(sl0!==null&&sl0<=0) return toast('اتسجل الحضور — بس خلي بالك: حصص الاشتراك خلصت');
+  if(sl!==null) return toast(sl<=0?'اتسجل الحضور — دي كانت آخر حصة في الاشتراك':`اتسجل الحضور — فاضل ${sl} حصة`);
   toast(st==='expired'||st==='none'?'اتسجل الحضور — بس خلي بالك: الاشتراك منتهي':st==='ending'?'اتسجل الحضور — الاشتراك قرب يخلص':'اتسجل الحضور');
 }
 function delAtt(aid){const a=DB.attendance.find(x=>x.id===aid),m=memberById(a.memberId);confirmBox(`مسح حضور يوم ${dshow(a.date)}؟`,()=>{DB.attendance=DB.attendance.filter(x=>x.id!==aid);commit('مسح حضور',`${m?.name} يوم ${dshow(a.date)}`)})}
 
 /* ============ الاشتراكات والدفعات ============ */
-function subForm(mid,sid){
+function subForm(mid,sid,actIn){
   const s=sid?DB.subs.find(x=>x.id===sid):null, m=memberById(mid);
   const cur=currentSub(mid), p0=DB.plans[0];
-  let start=today(); if(!s&&cur&&cur.end>=today()) start=addDays(cur.end,1);
-  const act0=cur?.activity||DB.activities[0]||'', pp=plansFor(act0)[0];
-  const v=s||{planId:pp?.id||'',activity:act0,trainerId:cur?.trainerId||'',start,len:pp?.len||1,unit:pp?.unit||'m',total:pp?.price||0,note:''};
+  let start=today(); if(!s&&cur&&['active','ending'].includes(subStatus(cur))) start=addDays(cur.end,1);
+  const act0=actIn||cur?.activity||DB.activities[0]||'', pp=plansFor(act0)[0];
+  const v=s||{planId:pp?.id||'',activity:act0,trainerId:cur?.trainerId||'',start,len:pp?.len||1,unit:pp?.unit||'m',sessions:pp?.sessions||0,total:pp?.price||0,note:''};
   const tr=DB.trainers.filter(x=>x.active||x.id===v.trainerId);
   const showMoney=!s||can('money');
   openForm(s?'تعديل الاشتراك':`اشتراك جديد — ${m.name}`,`<div class="grid2">
@@ -686,6 +697,7 @@ function subForm(mid,sid){
     ${fld('تاريخ البداية',`<input type="date" name="start" id="sf_start" value="${v.start}" required oninput="sfCalc()">`)}
     ${fld('المدة',`<div class="pair"><input type="number" min="1" name="len" id="sf_len" value="${v.len}" required oninput="sfCalc()"><select name="unit" id="sf_unit" onchange="sfCalc()">${opts([['m','شهر'],['d','يوم']],v.unit,0,1)}</select></div>`)}
     ${fld('تاريخ النهاية (بيتحسب لوحده)',`<input id="sf_end" readonly tabindex="-1">`)}
+    ${fld('عدد الحصص (0 = مفتوح)',`<input type="number" min="0" name="sessions" id="sf_ses" value="${+v.sessions||0}">`)}
     ${showMoney?fld('قيمة الاشتراك الإجمالية (ج.م)',`<input type="number" min="0" name="total" id="sf_total" value="${v.total}" required oninput="sfTot()">`):''}
     ${!s&&can('payments','add')?fld('المدفوع دلوقتي (ج.م)',`<input type="number" min="0" name="paid" id="sf_paid" value="${v.total}" oninput="this.dataset.t=1;sfTot()">`)+fld('طريقة الدفع',`<select name="method">${opts(METHODS,'كاش')}</select>`)+`<p class="muted wide" id="sf_left" style="grid-column:1/-1;margin:0"></p>`:''}
     ${fld('ملاحظات',`<input name="note" value="${esc(v.note)}">`,true)}
@@ -694,7 +706,7 @@ function subForm(mid,sid){
     const total=showMoney?+fd.total||0:s.total, paid=+fd.paid||0;
     if(paid>total) return 'المدفوع أكبر من قيمة الاشتراك';
     const plan=DB.plans.find(p=>p.id===fd.planId);
-    const data={planId:fd.planId,planName:plan?plan.name:'مخصص',activity:fd.activity,trainerId:fd.trainerId,start:fd.start,len:+fd.len,unit:fd.unit,end:endOf(fd.start,fd.len,fd.unit),total,note:fd.note};
+    const data={planId:fd.planId,planName:plan?plan.name:'مخصص',activity:fd.activity,trainerId:fd.trainerId,start:fd.start,len:+fd.len,unit:fd.unit,end:endOf(fd.start,fd.len,fd.unit),sessions:Math.max(0,+fd.sessions||0),total,note:fd.note};
     if(s){Object.assign(s,data);commit('تعديل اشتراك',`${m.name}: ${data.planName} من ${dshow(data.start)}`);toast('اتعدّل الاشتراك');return;}
     const ns={id:uid(),memberId:mid,...data,by:ME.name,createdAt:today()};DB.subs.push(ns);
     log('اشتراك جديد',`${m.name}: ${data.planName} بـ ${fmt(total)} من ${dshow(data.start)} لـ ${dshow(data.end)}`);
@@ -706,7 +718,7 @@ function subForm(mid,sid){
 function plansFor(act){const own=DB.plans.filter(p=>p.activity&&p.activity===act),names=new Set(own.map(p=>p.name));return own.concat(DB.plans.filter(p=>!p.activity&&!names.has(p.name)))}
 function planOpts(act,sel){return `<option value="">مخصص</option>`+plansFor(act).map(p=>`<option value="${p.id}"${p.id===sel?' selected':''}>${esc(p.name)}${can('money')?' — '+fmt(p.price)+' ج.م':''}</option>`).join('')}
 function sfAct(){const act=$('#sf_act').value,cur=$('#sf_plan').value,list=plansFor(act);const curP=DB.plans.find(p=>p.id===cur);const pick=(curP&&list.find(p=>p.name===curP.name))||list[0];$('#sf_plan').innerHTML=planOpts(act,cur===''?'':(pick?.id||''));if(cur!=='')sfPlan()}
-function sfPlan(){const p=DB.plans.find(x=>x.id===$('#sf_plan').value);if(!p) return;$('#sf_len').value=p.len;$('#sf_unit').value=p.unit;if($('#sf_total')){$('#sf_total').value=p.price;}const pd=$('#sf_paid');if(pd&&!pd.dataset.t) pd.value=p.price;sfCalc();sfTot()}
+function sfPlan(){const p=DB.plans.find(x=>x.id===$('#sf_plan').value);if(!p) return;$('#sf_len').value=p.len;$('#sf_unit').value=p.unit;if($('#sf_ses')) $('#sf_ses').value=+p.sessions||0;if($('#sf_total')){$('#sf_total').value=p.price;}const pd=$('#sf_paid');if(pd&&!pd.dataset.t) pd.value=p.price;sfCalc();sfTot()}
 function sfCalc(){const s=$('#sf_start')?.value,l=$('#sf_len')?.value,u=$('#sf_unit')?.value;if(s&&+l>0) $('#sf_end').value=dshow(endOf(s,l,u))}
 function sfTot(){const t=$('#sf_total'),p=$('#sf_paid'),o=$('#sf_left');if(!t||!p) return;if(!p.dataset.t) p.value=t.value;const left=(+t.value||0)-(+p.value||0);if(o) o.innerHTML=left>0?`هيبقى باقي عليه <b style="color:var(--bad)">${fmt(left)} ج.م</b>`:left<0?'<span style="color:var(--bad)">المدفوع أكبر من القيمة</span>':'مدفوع بالكامل'}
 function delSub(sid){
@@ -862,32 +874,35 @@ function rangeUI(kf,kt){
 }
 function repAdmin(){
   const W=DB.withdrawals||[];
-  const allIn=sum(DB.payments.filter(p=>!p.opening).map(p=>p.amount)), allOut=sum(DB.expenses.map(e=>e.amount)), allW=sum(W.map(wv)), allNet=allIn-allOut-allW;
+  const ADJ=DB.adjustments||[], adjIn=L=>sum(L.filter(x=>x.type==='in').map(x=>x.amount)), adjOut=L=>sum(L.filter(x=>x.type!=='in').map(x=>x.amount));
+  const allIn=sum(DB.payments.filter(p=>!p.opening).map(p=>p.amount))+adjIn(ADJ), allOut=sum(DB.expenses.map(e=>e.amount))+adjOut(ADJ), allW=sum(W.map(wv)), allNet=allIn-allOut-allW;
   const R=rangeUI('af','at'), a=R.a, b=R.b;
+  const adjs=ADJ.filter(x=>x.date>=a&&x.date<=b).sort((x,y)=>y.date.localeCompare(x.date)), aIn=adjIn(adjs), aOut=adjOut(adjs);
   const pays=DB.payments.filter(p=>!p.opening&&p.date>=a&&p.date<=b), exps=DB.expenses.filter(e=>e.date>=a&&e.date<=b), wds=W.filter(w=>w.date>=a&&w.date<=b).sort((x,y)=>y.date.localeCompare(x.date));
-  const inc=sum(pays.map(p=>p.amount)), out=sum(exps.map(e=>e.amount)), wd=sum(wds.map(wv)), net=inc-out-wd;
+  const payIn=sum(pays.map(p=>p.amount)), expOut=sum(exps.map(e=>e.amount)), inc=payIn+aIn, out=expOut+aOut, wd=sum(wds.map(wv)), net=inc-out-wd;
   const cats=[...new Set(DB.expenseCats.concat(exps.map(e=>e.cat)))].map(c=>[c,sum(exps.filter(e=>e.cat===c).map(e=>e.amount))]).filter(x=>x[1]>0).sort((x,y)=>y[1]-x[1]);
   const maxC=Math.max(1,...cats.map(x=>x[1]));
   const byTr={};pays.forEach(p=>{const sb=DB.subs.find(x=>x.id===p.subId);const k=sb?trainerName(sb.trainerId):'—';byTr[k]=(byTr[k]||0)+p.amount});
   const byAct={};pays.forEach(p=>{const sb=DB.subs.find(x=>x.id===p.subId);const k=sb?.activity||'—';byAct[k]=(byAct[k]||0)+p.amount});
   const byP={};wds.forEach(w=>{const k=partnerName(w.partnerId);byP[k]=(byP[k]||0)+wv(w)});
   const days={};const dd=d=>days[d]=days[d]||{inc:0,out:0,wd:0};
-  pays.forEach(p=>dd(p.date).inc+=p.amount);exps.forEach(e=>dd(e.date).out+=e.amount);wds.forEach(w=>dd(w.date).wd+=wv(w));
+  pays.forEach(p=>dd(p.date).inc+=p.amount);exps.forEach(e=>dd(e.date).out+=e.amount);adjs.forEach(x=>{if(x.type==='in') dd(x.date).inc+=x.amount; else dd(x.date).out+=x.amount});wds.forEach(w=>dd(w.date).wd+=wv(w));
   const kv=(o,id,h1,tot)=>table(id,[h1,'#المبلغ'],Object.entries(o).sort((x,y)=>y[1]-x[1]).map(([k,v])=>`<tr><td>${esc(k)}</td><td class="num">${fmt(v)}</td></tr>`),{empty:'مفيش',foot:['الإجمالي',fmt(tot)]});
   return `<div class="card" style="background:var(--accent-soft);border-color:var(--accent-soft)"><div class="row between"><h2>الإجمالي من أول ما بدأنا</h2><span class="muted" style="font-size:13px">بيتحسب لوحده — مش بيتأثر بالتاريخ</span></div>
     <div class="stats">${[['إجمالي اللي دخل',allIn],['إجمالي المصاريف',allOut],['إجمالي جاري الشركاء',allW],['صافي المتبقي معايا',allNet]].map(([l,v],i)=>`<div class="stat ${i===3?(v<0?'bad':'good'):''}"><span>${l}</span><b>${fmt(v)}</b><small>ج.م</small></div>`).join('')}</div></div>
-  <div class="row between"><h2>حسب الفترة</h2>${can('partners','add')?`<button class="btn primary" onclick="wdForm()">+ تسجيل مسحوبات شريك</button>`:''}</div>
+  <div class="row between"><h2>حسب الفترة</h2><div class="row">${can('adjust','add')?`<button class="btn" onclick="adjForm(null,'in')">+ إيراد إداري</button><button class="btn" onclick="adjForm(null,'out')">+ مصروف إداري</button>`:''}${can('partners','add')?`<button class="btn primary" onclick="wdForm()">+ تسجيل مسحوبات شريك</button>`:''}</div></div>
   ${R.html}
   <div class="stats">
-    <div class="stat good"><span>الإيراد</span><b>${fmt(inc)}</b><small>${pays.length} دفعة · ج.م</small></div>
-    <div class="stat bad"><span>المصاريف</span><b>${fmt(out)}</b><small>${exps.length} بند · ج.م</small></div>
+    <div class="stat good"><span>الإيراد</span><b>${fmt(inc)}</b><small>${aIn?`اشتراكات ${fmt(payIn)} + إداري ${fmt(aIn)}`:pays.length+' دفعة · ج.م'}</small></div>
+    <div class="stat bad"><span>المصاريف</span><b>${fmt(out)}</b><small>${aOut?`يومية ${fmt(expOut)} + إداري ${fmt(aOut)}`:exps.length+' بند · ج.م'}</small></div>
     <div class="stat"><span>جاري الشركاء (صافي)</span><b>${fmt(wd)}</b><small>سحب ${fmt(wOut(wds))} − استرداد ${fmt(wRef(wds))}</small></div>
     <div class="stat ${net>=0?'good':'bad'}"><span>الصافي في الفترة</span><b>${fmt(net)}</b><small>ج.م</small></div>
   </div>
   <div class="cards2">
-    <div class="card"><div class="row between"><h2>المصاريف حسب النوع</h2>${copyBtn('aCat')}</div>${table('aCat',['النوع','#المبلغ','#النسبة',''],cats.map(([c,v])=>`<tr><td>${esc(c)}</td><td class="num">${fmt(v)}</td><td class="num">${Math.round(v/out*100)}%</td><td style="width:35%"><div class="bar"><i style="width:${v/maxC*100}%"></i></div></td></tr>`),{empty:'مفيش مصاريف في الفترة دي',foot:['الإجمالي',fmt(out),'100%','']})}</div>
-    <div class="card"><div class="row between"><h2>الإيراد حسب نوع التمرين</h2>${copyBtn('aAct')}</div>${kv(byAct,'aAct','نوع التمرين',inc)}<div class="row between"><h3>حسب الكابتن</h3>${copyBtn('aTr')}</div>${kv(byTr,'aTr','الكابتن',inc)}</div>
+    <div class="card"><div class="row between"><h2>المصاريف حسب النوع</h2>${copyBtn('aCat')}</div>${table('aCat',['النوع','#المبلغ','#النسبة',''],cats.map(([c,v])=>`<tr><td>${esc(c)}</td><td class="num">${fmt(v)}</td><td class="num">${Math.round(v/expOut*100)}%</td><td style="width:35%"><div class="bar"><i style="width:${v/maxC*100}%"></i></div></td></tr>`),{empty:'مفيش مصاريف في الفترة دي',foot:['الإجمالي',fmt(expOut),'100%','']})}</div>
+    <div class="card"><div class="row between"><h2>الإيراد حسب نوع التمرين</h2>${copyBtn('aAct')}</div>${kv(byAct,'aAct','نوع التمرين',payIn)}<div class="row between"><h3>حسب الكابتن</h3>${copyBtn('aTr')}</div>${kv(byTr,'aTr','الكابتن',payIn)}</div>
   </div>
+  ${can('adjust')?`<div class="tblbox"><div class="row between"><h2>إيرادات ومصروفات إدارية</h2>${copyBtn('aAdj')}</div><p class="muted" style="margin:0">مبالغ بتتسجل هنا بس (زي رصيد قبل السيستم)، ومش بتظهر في التقرير اليومي ولا في الدرج.</p>${table('aAdj',['#التاريخ','النوع','البيان','#المبلغ','سجّله',''],adjs.map(x=>`<tr><td class="num">${dshow(x.date)}</td><td>${x.type==='in'?'<span class="chip ok">إيراد</span>':'<span class="chip bad">مصروف</span>'}</td><td style="white-space:normal">${esc(x.note)}</td><td class="num">${fmt(x.amount)}</td><td>${esc(x.by)}</td><td>${can('adjust','edit')?`<button class="btn sm" onclick="adjForm('${x.id}')">تعديل</button>`:''} ${can('adjust','delete')?`<button class="btn sm danger" onclick="delAdj('${x.id}')">مسح</button>`:''}</td></tr>`),{empty:'مفيش حاجة متسجلة في الفترة دي',foot:['الإجمالي','',`إيراد ${fmt(aIn)} · مصروف ${fmt(aOut)}`,'','','']})}</div>`:''}
   <div class="tblbox"><div class="row between"><h2>جاري الشركاء في الفترة</h2><div class="row">${can('partners')?`<button class="btn sm" onclick="go('partners')">صفحة الشركاء</button>`:''}${copyBtn('aW')}</div></div>${table('aW',['الشريك','#مسحوب','#مسترد','#الصافي'],DB.partners.map(p=>{const L=wds.filter(w=>w.partnerId===p.id);return L.length?`<tr><td>${esc(p.name)}</td><td class="num">${fmt(wOut(L))}</td><td class="num">${fmt(wRef(L))}</td><td class="num"><b>${fmt(wOut(L)-wRef(L))}</b></td></tr>`:''}).filter(Boolean),{empty:'مفيش مسحوبات في الفترة دي',foot:['الإجمالي',fmt(wOut(wds)),fmt(wRef(wds)),fmt(wd)]})}</div>
   <div class="tblbox"><div class="row between"><h2>يوم بيوم</h2>${copyBtn('aDay')}</div>${table('aDay',['#اليوم','#الإيراد','#المصاريف','#جاري الشركاء','#الصافي'],Object.keys(days).sort().map(d=>{const x=days[d],n=x.inc-x.out-x.wd;return `<tr><td class="num">${dshow(d)}</td><td class="num">${fmt(x.inc)}</td><td class="num">${fmt(x.out)}</td><td class="num">${fmt(x.wd)}</td><td class="num" style="color:${n<0?'var(--bad)':'var(--ok)'}">${fmt(n)}</td></tr>`}),{foot:['الإجمالي',fmt(inc),fmt(out),fmt(wd),fmt(net)]})}</div>`;
 }
@@ -921,6 +936,22 @@ function partnerForm(id){
   });
 }
 function delPartner(id){const p=DB.partners.find(x=>x.id===id);if(DB.withdrawals.some(w=>w.partnerId===id)) return toast('الشريك ده عليه مسحوبات متسجلة — مينفعش يتمسح');confirmBox(`مسح الشريك ${esc(p.name)}؟`,()=>{DB.partners=DB.partners.filter(x=>x.id!==id);commit('مسح شريك',p.name)})}
+function adjForm(id,type){
+  const x=id?DB.adjustments.find(y=>y.id===id):null, v=x||{date:today(),type:type||'in',amount:'',note:''};
+  openForm(x?'تعديل مبلغ إداري':v.type==='in'?'إيراد إداري':'مصروف إداري',`<div class="grid2">
+    ${fld('النوع',`<select name="type">${opts([['in','إيراد (فلوس دخلت)'],['out','مصروف (فلوس خرجت)']],v.type,0,1)}</select>`)}
+    ${fld('المبلغ (ج.م)',`<input type="number" min="1" name="amount" value="${v.amount}" required>`)}
+    ${fld('التاريخ',`<input type="date" name="date" value="${v.date}" required>`)}
+    ${fld('البيان',`<input name="note" value="${esc(v.note)}" placeholder="مثال: إجمالي إيرادات قبل السيستم" required>`)}
+  </div><p class="muted" style="margin:0">المبلغ ده بيدخل في تقارير الإدارة بس، ومش بيظهر في التقرير اليومي.</p>`,fd=>{
+    if(!(+fd.amount>0)||!fd.date) return 'اكتب المبلغ والتاريخ';
+    if(!fd.note.trim()) return 'اكتب البيان';
+    const d={type:fd.type,amount:+fd.amount,date:fd.date,note:fd.note.trim()}, lbl=d.type==='in'?'إيراد إداري':'مصروف إداري';
+    if(x){Object.assign(x,d);commit('تعديل '+lbl,`${d.note}: ${fmt(d.amount)} ج.م (${dshow(d.date)})`);return}
+    DB.adjustments.push({id:uid(),...d,by:ME.name});commit(lbl,`${d.note}: ${fmt(d.amount)} ج.م (${dshow(d.date)})`);toast('اتسجل');
+  });
+}
+function delAdj(id){const x=DB.adjustments.find(y=>y.id===id),lbl=x.type==='in'?'إيراد إداري':'مصروف إداري';confirmBox(`مسح ${lbl} "${esc(x.note)}" بـ ${fmt(x.amount)} ج.م؟`,()=>{DB.adjustments=DB.adjustments.filter(y=>y.id!==id);commit('مسح '+lbl,`${x.note}: ${fmt(x.amount)} ج.م (${dshow(x.date)})`)})}
 function wdForm(id,pid,type){
   if(!DB.partners.length) return toast('ضيف الشركاء الأول من صفحة الشركاء');
   const w=id?DB.withdrawals.find(x=>x.id===id):null, v=w||{date:today(),partnerId:pid||DB.partners[0].id,amount:'',note:'',type:type||'out'};
@@ -954,7 +985,7 @@ function vSettings(){
   return `<h1>الإعدادات</h1>
   <div class="card"><h2>اسم الجيم</h2>${ed?`<form class="row" onsubmit="event.preventDefault();setGym(this.v.value)"><input class="in" name="v" style="max-width:300px" value="${esc(DB.settings.gymName)}"><button class="btn sm">حفظ</button></form>`:`<p>${esc(DB.settings.gymName)}</p>`}</div>
   <div class="card"><div class="row between"><h2>الباقات والأسعار</h2>${ed?`<button class="btn sm primary" onclick="planForm()">+ باقة</button>`:''}</div>
-    <p class="muted" style="margin:0">كل باقة ليها نوع تمرين وسعرها الخاص. الباقة اللي نوعها "كل الأنواع" بتظهر مع أي تمرين.</p>${table('tPlans',['نوع التمرين','الباقة','المدة','#السعر',''],DB.plans.slice().sort((a,b)=>(a.activity||'ي').localeCompare(b.activity||'ي')||(a.unit===b.unit?0:a.unit==='d'?-1:1)||a.len-b.len).map(p=>`<tr><td>${p.activity?`<span class="chip acc">${esc(p.activity)}</span>`:'<span class="chip">كل الأنواع</span>'}</td><td>${esc(p.name)}</td><td>${p.len} ${p.unit==='d'?'يوم':'شهر'}</td><td class="num">${can('money')?fmt(p.price):'••••'}</td><td>${ed?`<button class="btn sm" onclick="planForm('${p.id}')">تعديل</button> <button class="btn sm danger" onclick="delPlan('${p.id}')">مسح</button>`:''}</td></tr>`),{copy:false})}</div>
+    <p class="muted" style="margin:0">كل باقة ليها نوع تمرين وسعرها الخاص. الباقة اللي نوعها "كل الأنواع" بتظهر مع أي تمرين.</p>${table('tPlans',['نوع التمرين','الباقة','المدة','#الحصص','#السعر',''],DB.plans.slice().sort((a,b)=>(a.activity||'ي').localeCompare(b.activity||'ي')||(a.unit===b.unit?0:a.unit==='d'?-1:1)||a.len-b.len).map(p=>`<tr><td>${p.activity?`<span class="chip acc">${esc(p.activity)}</span>`:'<span class="chip">كل الأنواع</span>'}</td><td>${esc(p.name)}</td><td>${p.len} ${p.unit==='d'?'يوم':'شهر'}</td><td class="num">${+p.sessions>0?p.sessions+' حصة':'مفتوح'}</td><td class="num">${can('money')?fmt(p.price):'••••'}</td><td>${ed?`<button class="btn sm" onclick="planForm('${p.id}')">تعديل</button> <button class="btn sm danger" onclick="delPlan('${p.id}')">مسح</button>`:''}</td></tr>`),{copy:false})}</div>
   <div class="card"><div class="row between"><h2>الكباتن</h2>${ed?`<button class="btn sm primary" onclick="trainerForm()">+ كابتن</button>`:''}</div>
     ${table('tTr',['الاسم','الموبايل','الحالة','#أعضاء ساريين',''],DB.trainers.map(tr=>{const n=DB.members.filter(m=>{const s=currentSub(m.id);return s&&s.trainerId===tr.id&&['active','ending'].includes(subStatus(s))}).length;return `<tr><td>${esc(tr.name)}</td><td class="num">${esc(tr.phone)}</td><td>${tr.active?'<span class="chip ok">شغال</span>':'<span class="chip">موقوف</span>'}</td><td class="num">${n}</td><td>${ed?`<button class="btn sm" onclick="trainerForm('${tr.id}')">تعديل</button> <button class="btn sm danger" onclick="delTrainer('${tr.id}')">مسح</button>`:''}</td></tr>`}))}</div>
   <div class="cards2">
@@ -974,10 +1005,10 @@ function setGym(v){v=v.trim();if(!v) return;const o=DB.settings.gymName;DB.setti
 function addItem(key,v){v=(v||'').trim();if(!v) return;if(DB[key].includes(v)) return toast('موجود بالفعل');DB[key].push(v);commit('تعديل الإعدادات',`إضافة "${v}"`)}
 function delItem(key,i){const v=DB[key][i];confirmBox(`مسح "${esc(v)}" من القائمة؟ البيانات القديمة اللي عليه هتفضل زي ما هي.`,()=>{DB[key].splice(i,1);commit('تعديل الإعدادات',`مسح "${v}"`)})}
 function planForm(id){
-  const p=id?DB.plans.find(x=>x.id===id):null,v=p||{name:'',activity:'',len:1,unit:'m',price:''};
-  openForm(p?'تعديل باقة':'باقة جديدة',`<div class="grid2">${fld('نوع التمرين',`<select name="activity"><option value="">كل الأنواع</option>${opts(DB.activities,v.activity||'')}</select>`)}${fld('اسم الباقة',`<input name="name" value="${esc(v.name)}" required>`)}${fld('المدة',`<div class="pair"><input type="number" min="1" name="len" value="${v.len}"><select name="unit">${opts([['m','شهر'],['d','يوم']],v.unit,0,1)}</select></div>`)}${fld('السعر (ج.م)',`<input type="number" min="0" name="price" value="${v.price}" required>`)}</div>`,fd=>{
+  const p=id?DB.plans.find(x=>x.id===id):null,v=p||{name:'',activity:'',len:1,unit:'m',sessions:0,price:''};
+  openForm(p?'تعديل باقة':'باقة جديدة',`<div class="grid2">${fld('نوع التمرين',`<select name="activity"><option value="">كل الأنواع</option>${opts(DB.activities,v.activity||'')}</select>`)}${fld('اسم الباقة',`<input name="name" value="${esc(v.name)}" required>`)}${fld('المدة',`<div class="pair"><input type="number" min="1" name="len" value="${v.len}"><select name="unit">${opts([['m','شهر'],['d','يوم']],v.unit,0,1)}</select></div>`)}${fld('عدد الحصص (0 = مفتوح)',`<input type="number" min="0" name="sessions" value="${+v.sessions||0}">`)}${fld('السعر (ج.م)',`<input type="number" min="0" name="price" value="${v.price}" required>`)}</div><p class="muted" style="margin:0">لو حددت عدد حصص، الاشتراك بيخلص لما يخلص الحصص أو المدة، أيهما أقرب.</p>`,fd=>{
     if(!fd.name.trim()) return 'اكتب اسم الباقة';
-    const d={name:fd.name.trim(),activity:fd.activity||'',len:+fd.len||1,unit:fd.unit,price:+fd.price||0};
+    const d={name:fd.name.trim(),activity:fd.activity||'',len:+fd.len||1,unit:fd.unit,sessions:Math.max(0,+fd.sessions||0),price:+fd.price||0};
     if(p){Object.assign(p,d);commit('تعديل باقة',`${d.activity||'كل الأنواع'} — ${d.name}: ${fmt(d.price)} ج.م`)}else{DB.plans.push({id:uid(),...d});commit('باقة جديدة',`${d.activity||'كل الأنواع'} — ${d.name}: ${fmt(d.price)} ج.م`)}
   });
 }
@@ -1018,12 +1049,12 @@ function restoreFile(inp){
 }
 /* ---- استيراد Excel ---- */
 function loadXLSX(){return new Promise((res,rej)=>{if(window.XLSX) return res(window.XLSX);const sc=document.createElement('script');sc.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';sc.onload=()=>res(window.XLSX);sc.onerror=()=>rej(new Error('x'));document.head.appendChild(sc)})}
-const XL_COLS=[['code','الكود'],['name','الاسم'],['phone','الموبايل'],['activity','نوع التمرين'],['trainer','الكابتن'],['start','تاريخ البداية'],['months','المدة بالشهور'],['end','تاريخ النهاية'],['paid','المدفوع'],['left','المتبقي'],['notes','ملاحظات']];
-const XL_ALIAS={code:['الكود','كود','كودالعميل','code'],name:['الاسم','اسم','اسماللاعب','اسماللعيب','الاسمبالكامل','name'],phone:['الموبايل','موبايل','الهاتف','هاتف','التليفون','رقمالموبايل','رقمالهاتف','phone','mobile'],activity:['نوعالتمرين','نوعالاشتراك','النشاط','بيتمرن','بيتمرنايه','activity'],trainer:['الكابتن','كابتن','المدرب','اسمالكابتن','trainer'],start:['تاريخالبداية','البداية','بدايةالاشتراك','start'],months:['المدةبالشهور','المدة','شهور','عددالشهور','months'],end:['تاريخالنهاية','النهاية','نهايةالاشتراك','end'],paid:['المدفوع','مدفوع','paid'],left:['المتبقي','الباقي','متبقي','الباقيعليه','remaining'],total:['قيمةالاشتراك','القيمة','الإجمالي','الاجمالي','total'],notes:['ملاحظات','notes']};
+const XL_COLS=[['code','الكود'],['name','الاسم'],['phone','الموبايل'],['activity','نوع التمرين'],['trainer','الكابتن'],['start','تاريخ البداية'],['months','المدة بالشهور'],['end','تاريخ النهاية'],['sessions','عدد الحصص'],['sleft','الحصص الباقية'],['paid','المدفوع'],['left','المتبقي'],['notes','ملاحظات']];
+const XL_ALIAS={code:['الكود','كود','كودالعميل','code'],name:['الاسم','اسم','اسماللاعب','اسماللعيب','الاسمبالكامل','name'],phone:['الموبايل','موبايل','الهاتف','هاتف','التليفون','رقمالموبايل','رقمالهاتف','phone','mobile'],activity:['نوعالتمرين','نوعالاشتراك','النشاط','بيتمرن','بيتمرنايه','activity'],trainer:['الكابتن','كابتن','المدرب','اسمالكابتن','trainer'],start:['تاريخالبداية','البداية','بدايةالاشتراك','start'],months:['المدةبالشهور','المدة','شهور','عددالشهور','months'],end:['تاريخالنهاية','النهاية','نهايةالاشتراك','end'],paid:['المدفوع','مدفوع','paid'],left:['المتبقي','الباقي','متبقي','الباقيعليه','remaining'],total:['قيمةالاشتراك','القيمة','الإجمالي','الاجمالي','total'],sessions:['عددالحصص','الحصص','اجماليالحصص','sessions'],sleft:['الحصصالباقيه','الحصصالمتبقيه','باقيحصص','حصصباقيه','الحصصالباقية'],notes:['ملاحظات','notes']};
 const xlNorm=t=>String(t??'').replace(/[\s_\-()]/g,'').replace(/[أإآ]/g,'ا').replace(/ة$/,'ه').toLowerCase();
 async function xlTemplate(){
   let X;try{X=await loadXLSX()}catch(e){return toast('مش قادر أحمّل أداة Excel — اتأكد من النت')}
-  const ws=X.utils.aoa_to_sheet([XL_COLS.map(c=>c[1]),['','محمد أحمد','01012345678','حديد','',dshow(today()),1,'',400,200,'مثال — امسح السطر ده']]);
+  const ws=X.utils.aoa_to_sheet([XL_COLS.map(c=>c[1]),['','محمد أحمد','01012345678','حديد','',dshow(today()),1,'',12,8,400,200,'مثال — امسح السطر ده']]);
   ws['!cols']=XL_COLS.map(()=>({wch:16}));
   const wb=X.utils.book_new();wb.Workbook={Views:[{RTL:true}]};X.utils.book_append_sheet(wb,ws,'الأعضاء');
   X.writeFile(wb,'keepfit-members-template.xlsx');
@@ -1052,7 +1083,7 @@ async function xlRead(inp){
     if(r.every(c=>String(c).trim()==='')) return;
     const o={line:hi+k+2,code:String(g('code')).trim(),name:String(g('name')).trim(),phone:String(g('phone')).replace(/\D/g,''),activity:String(g('activity')).trim(),trainer:String(g('trainer')).trim(),notes:String(g('notes')).trim()};
     if(/^1\d{9}$/.test(o.phone)) o.phone='0'+o.phone;
-    o.start=xlDate(g('start'),X);o.end=xlDate(g('end'),X);o.months=xlNum(g('months'));o.paid=xlNum(g('paid'));o.left=xlNum(g('left'));const tot=xlNum(g('total'));
+    o.start=xlDate(g('start'),X);o.end=xlDate(g('end'),X);o.months=xlNum(g('months'));o.paid=xlNum(g('paid'));o.left=xlNum(g('left'));const tot=xlNum(g('total'));o.ses=xlNum(g('sessions'));o.sleft=String(g('sleft')).trim()===''?null:xlNum(g('sleft'));
     const errs=[];
     if(/مثال/.test(o.notes)) errs.push('سطر المثال');
     if(!o.name) errs.push('الاسم ناقص');
@@ -1061,9 +1092,10 @@ async function xlRead(inp){
     else if(fPh.has(o.phone)) errs.push('الرقم متكرر في الملف');
     if(o.code&&(codes.has(o.code)||fCo.has(o.code))) errs.push('الكود متكرر');
     if(o.start===null||o.end===null) errs.push('تاريخ مش مفهوم (اكتبه يوم/شهر/سنة)');
-    if(isNaN(o.paid)||isNaN(o.left)||isNaN(o.months)||isNaN(tot)) errs.push('رقم مش مفهوم');
+    if(isNaN(o.paid)||isNaN(o.left)||isNaN(o.months)||isNaN(tot)||isNaN(o.ses)||(o.sleft!==null&&isNaN(o.sleft))) errs.push('رقم مش مفهوم');
+    if(!errs.length){ if(o.sleft!==null&&!(o.ses>0)) o.ses=o.sleft; if(o.ses>0&&o.sleft!==null&&o.sleft>o.ses) errs.push('الحصص الباقية أكبر من عدد الحصص'); o.usedBefore=o.ses>0&&o.sleft!==null?o.ses-o.sleft:0; }
     if(!errs.length){
-      o.hasSub=!!(o.activity||o.start||o.end||o.paid||o.left||tot);
+      o.hasSub=!!(o.activity||o.start||o.end||o.paid||o.left||tot||o.ses);
       if(!o.left&&tot>o.paid) o.left=tot-o.paid;
       if(o.hasSub){o.start=o.start||today();if(!o.end){const n=o.months>0?o.months:1;o.end=endOf(o.start,n,'m');o.len=n}else{o.len=o.months>0?o.months:Math.max(1,Math.round(dBetween(o.start,o.end)/30))}
         if(o.end<o.start) errs.push('تاريخ النهاية قبل البداية');}
@@ -1073,7 +1105,7 @@ async function xlRead(inp){
   });
   const ok=XL_ROWS.filter(o=>!o.errs.length),bad=XL_ROWS.length-ok.length;
   openModal('مراجعة ملف Excel',`<div class="stats"><div class="stat good"><span>جاهزين للاستيراد</span><b>${ok.length}</b></div><div class="stat ${bad?'bad':''}"><span>فيهم مشكلة (مش هيتسجلوا)</span><b>${bad}</b></div><div class="stat"><span>إجمالي المتبقي</span><b>${fmt(sum(ok.map(o=>o.left)))}</b><small>ج.م</small></div></div>
-    <div class="tbl" style="max-height:50vh;overflow:auto">${'<table><thead><tr><th class="num">السطر</th><th>الاسم</th><th>الموبايل</th><th>التمرين</th><th>من</th><th>إلى</th><th class="num">المدفوع</th><th class="num">المتبقي</th><th>الحالة</th></tr></thead><tbody>'+XL_ROWS.slice(0,500).map(o=>`<tr><td class="num">${o.line}</td><td>${esc(o.name)}</td><td class="num">${esc(o.phone)}</td><td>${esc(o.activity||'—')}</td><td class="num">${o.hasSub?dshow(o.start):'—'}</td><td class="num">${o.hasSub?dshow(o.end):'—'}</td><td class="num">${fmt(o.paid)}</td><td class="num">${fmt(o.left)}</td><td>${o.errs.length?`<span class="chip bad">${esc(o.errs.join('، '))}</span>`:'<span class="chip ok">تمام</span>'}</td></tr>`).join('')+'</tbody></table>'}</div>
+    <div class="tbl" style="max-height:50vh;overflow:auto">${'<table><thead><tr><th class="num">السطر</th><th>الاسم</th><th>الموبايل</th><th>التمرين</th><th>من</th><th>إلى</th><th class="num">الحصص</th><th class="num">المدفوع</th><th class="num">المتبقي</th><th>الحالة</th></tr></thead><tbody>'+XL_ROWS.slice(0,500).map(o=>`<tr><td class="num">${o.line}</td><td>${esc(o.name)}</td><td class="num">${esc(o.phone)}</td><td>${esc(o.activity||'—')}</td><td class="num">${o.hasSub?dshow(o.start):'—'}</td><td class="num">${o.hasSub?dshow(o.end):'—'}</td><td class="num">${o.ses>0?(o.ses-o.usedBefore)+' من '+o.ses:'مفتوح'}</td><td class="num">${fmt(o.paid)}</td><td class="num">${fmt(o.left)}</td><td>${o.errs.length?`<span class="chip bad">${esc(o.errs.join('، '))}</span>`:'<span class="chip ok">تمام</span>'}</td></tr>`).join('')+'</tbody></table>'}</div>
     <div class="form-end">${ok.length?`<button class="btn primary" onclick="xlImport()">استيراد ${ok.length} عضو</button>`:''}<button class="btn ghost" onclick="closeModal()">إلغاء</button></div>`);
 }
 function xlImport(){
@@ -1084,7 +1116,7 @@ function xlImport(){
     const mid=uid();DB.members.push({id:mid,code,name:o.name,phone:o.phone,gender:'ذكر',notes:o.notes,createdAt:today()});
     if(o.hasSub){
       if(o.activity&&!DB.activities.includes(o.activity)) DB.activities.push(o.activity);
-      const sid=uid();DB.subs.push({id:sid,memberId:mid,planId:'',planName:'رصيد افتتاحي',activity:o.activity||DB.activities[0]||'',trainerId:trByName(o.trainer),start:o.start,len:o.len,unit:'m',end:o.end,total:(o.paid||0)+(o.left||0),note:'مستورد من Excel',by:ME.name,createdAt:today()});
+      const sid=uid();DB.subs.push({id:sid,memberId:mid,planId:'',planName:'رصيد افتتاحي',activity:o.activity||DB.activities[0]||'',trainerId:trByName(o.trainer),start:o.start,len:o.len,unit:'m',end:o.end,sessions:o.ses>0?o.ses:0,usedBefore:o.usedBefore||0,total:(o.paid||0)+(o.left||0),note:'مستورد من Excel',by:ME.name,createdAt:today()});
       if(o.paid>0) DB.payments.push({id:uid(),memberId:mid,subId:sid,amount:o.paid,date:o.start,method:'كاش',note:'رصيد افتتاحي (Excel)',opening:true,by:ME.name});
     }
   });
