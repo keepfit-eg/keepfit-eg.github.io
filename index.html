@@ -830,7 +830,7 @@ function dayRange(){
 function setDay(k,v){const t=today(),min=addDays(t,-9);if(v&&(v<min||v>t)) toast('التقرير اليومي بيعرض آخر 10 أيام بس');F[k]=v;render()}
 function repDaily(){
   const {a,b,min,t}=dayRange(), one=a===b;
-  const pays=DB.payments.filter(p=>p.date>=a&&p.date<=b).sort((x,y)=>(x.date+x.method).localeCompare(y.date+y.method));
+  const pays=DB.payments.filter(p=>!p.opening&&p.date>=a&&p.date<=b).sort((x,y)=>(x.date+x.method).localeCompare(y.date+y.method));
   const exps=DB.expenses.filter(e=>e.date>=a&&e.date<=b).sort((x,y)=>x.date.localeCompare(y.date));
   const inc=sum(pays.map(p=>p.amount)), out=sum(exps.map(e=>e.amount)), net=inc-out;
   const byM={};METHODS.forEach(m=>byM[m]=0);pays.forEach(p=>byM[p.method]=(byM[p.method]||0)+p.amount);
@@ -862,9 +862,9 @@ function rangeUI(kf,kt){
 }
 function repAdmin(){
   const W=DB.withdrawals||[];
-  const allIn=sum(DB.payments.map(p=>p.amount)), allOut=sum(DB.expenses.map(e=>e.amount)), allW=sum(W.map(wv)), allNet=allIn-allOut-allW;
+  const allIn=sum(DB.payments.filter(p=>!p.opening).map(p=>p.amount)), allOut=sum(DB.expenses.map(e=>e.amount)), allW=sum(W.map(wv)), allNet=allIn-allOut-allW;
   const R=rangeUI('af','at'), a=R.a, b=R.b;
-  const pays=DB.payments.filter(p=>p.date>=a&&p.date<=b), exps=DB.expenses.filter(e=>e.date>=a&&e.date<=b), wds=W.filter(w=>w.date>=a&&w.date<=b).sort((x,y)=>y.date.localeCompare(x.date));
+  const pays=DB.payments.filter(p=>!p.opening&&p.date>=a&&p.date<=b), exps=DB.expenses.filter(e=>e.date>=a&&e.date<=b), wds=W.filter(w=>w.date>=a&&w.date<=b).sort((x,y)=>y.date.localeCompare(x.date));
   const inc=sum(pays.map(p=>p.amount)), out=sum(exps.map(e=>e.amount)), wd=sum(wds.map(wv)), net=inc-out-wd;
   const cats=[...new Set(DB.expenseCats.concat(exps.map(e=>e.cat)))].map(c=>[c,sum(exps.filter(e=>e.cat===c).map(e=>e.amount))]).filter(x=>x[1]>0).sort((x,y)=>y[1]-x[1]);
   const maxC=Math.max(1,...cats.map(x=>x[1]));
@@ -961,7 +961,14 @@ function vSettings(){
     <div class="card"><h2>الأنشطة (بيتمرن إيه)</h2>${chips(DB.activities,'activities')}</div>
     <div class="card"><h2>أنواع المصاريف</h2>${chips(DB.expenseCats,'expenseCats')}</div>
   </div>
-  ${ed?`<div class="card"><h2>نسخة احتياطية</h2><p class="muted" style="margin:0">البيانات متخزنة أونلاين بشكل آمن. لو حابب، تقدر تاخد نسخة كنص وتحفظها عندك، أو ترجّع نسخة قديمة.</p><div class="row"><button class="btn" onclick="exportData()">نسخ احتياطي</button><button class="btn" onclick="importData()">استرجاع نسخة</button>${DB.demo?`<button class="btn danger" onclick="clearDemo()">مسح بيانات الأمثلة</button>`:''}</div></div>`:''}`;
+  ${ME.roleId==='admin'?`<div class="card"><h2>أدوات الأدمن</h2>
+    <div class="cards2">
+      <div class="card" style="background:var(--bg)"><h3>استيراد الأعضاء من Excel</h3><p class="muted" style="margin:0">لأول مرة بس: نزّل النموذج، املاه ببيانات اللعيبة، وارفعه. هيتعمل لكل لاعب ملفه واشتراكه والمدفوع والمتبقي.</p>
+        <div class="row"><button class="btn" onclick="xlTemplate()">تحميل نموذج Excel</button><label class="btn primary" for="xlFile">رفع ملف Excel</label><input type="file" id="xlFile" accept=".xlsx,.xls,.csv" hidden onchange="xlRead(this)"></div></div>
+      <div class="card" style="background:var(--bg)"><h3>النسخة الاحتياطية</h3><p class="muted" style="margin:0">نزّل ملف فيه كل بيانات السيستم واحفظه عندك (يُفضّل كل أسبوع). ولو حصلت مشكلة ترجّع منه.</p>
+        <div class="row"><button class="btn primary" onclick="downloadBackup()">تحميل نسخة احتياطية</button><label class="btn" for="bkFile">استرجاع من ملف</label><input type="file" id="bkFile" accept=".json,.txt" hidden onchange="restoreFile(this)">${DB.demo?`<button class="btn danger" onclick="clearDemo()">مسح بيانات الأمثلة</button>`:''}</div>
+        ${DB.settings.lastBackup?`<p class="muted" style="margin:0;font-size:13px">آخر نسخة: ${dshow(DB.settings.lastBackup)}</p>`:''}</div>
+    </div></div>`:''}`;
 }
 function setGym(v){v=v.trim();if(!v) return;const o=DB.settings.gymName;DB.settings.gymName=v;commit('تعديل الإعدادات',`اسم الجيم: ${o} ← ${v}`);toast('اتحفظ')}
 function addItem(key,v){v=(v||'').trim();if(!v) return;if(DB[key].includes(v)) return toast('موجود بالفعل');DB[key].push(v);commit('تعديل الإعدادات',`إضافة "${v}"`)}
@@ -998,6 +1005,90 @@ function importData(){
     if(!DB.roles.some(r=>r.id==='admin')) return 'النسخة دي ناقصها دور الأدمن';
     commit('استرجاع نسخة',`استرجاع بيانات: ${DB.members.length} عضو`);toast('اتسترجعت النسخة — المستخدمين زي ما هما');
   },'استرجاع');
+}
+function backupText(){return JSON.stringify(Object.assign({},DB,{users:(DB.users||[]).map(u=>({id:u.id,name:u.name,username:u.username,roleId:u.roleId,trainerId:u.trainerId||'',active:u.active}))}))}
+function saveFile(name,blob){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000)}
+function downloadBackup(){
+  saveFile(`keepfit-backup-${today()}.json`,new Blob([backupText()],{type:'application/json'}));
+  DB.settings.lastBackup=today();commit('نسخة احتياطية','تحميل ملف نسخة احتياطية');toast('اتنزلت النسخة الاحتياطية — احفظها في مكان أمين');
+}
+function restoreFile(inp){
+  const f=inp.files[0];inp.value='';if(!f) return;
+  const r=new FileReader();r.onload=()=>{importData();const t=$('#mForm textarea[name=t]');if(t) t.value=r.result;};r.readAsText(f);
+}
+/* ---- استيراد Excel ---- */
+function loadXLSX(){return new Promise((res,rej)=>{if(window.XLSX) return res(window.XLSX);const sc=document.createElement('script');sc.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';sc.onload=()=>res(window.XLSX);sc.onerror=()=>rej(new Error('x'));document.head.appendChild(sc)})}
+const XL_COLS=[['code','الكود'],['name','الاسم'],['phone','الموبايل'],['activity','نوع التمرين'],['trainer','الكابتن'],['start','تاريخ البداية'],['months','المدة بالشهور'],['end','تاريخ النهاية'],['paid','المدفوع'],['left','المتبقي'],['notes','ملاحظات']];
+const XL_ALIAS={code:['الكود','كود','كودالعميل','code'],name:['الاسم','اسم','اسماللاعب','اسماللعيب','الاسمبالكامل','name'],phone:['الموبايل','موبايل','الهاتف','هاتف','التليفون','رقمالموبايل','رقمالهاتف','phone','mobile'],activity:['نوعالتمرين','نوعالاشتراك','النشاط','بيتمرن','بيتمرنايه','activity'],trainer:['الكابتن','كابتن','المدرب','اسمالكابتن','trainer'],start:['تاريخالبداية','البداية','بدايةالاشتراك','start'],months:['المدةبالشهور','المدة','شهور','عددالشهور','months'],end:['تاريخالنهاية','النهاية','نهايةالاشتراك','end'],paid:['المدفوع','مدفوع','paid'],left:['المتبقي','الباقي','متبقي','الباقيعليه','remaining'],total:['قيمةالاشتراك','القيمة','الإجمالي','الاجمالي','total'],notes:['ملاحظات','notes']};
+const xlNorm=t=>String(t??'').replace(/[\s_\-()]/g,'').replace(/[أإآ]/g,'ا').replace(/ة$/,'ه').toLowerCase();
+async function xlTemplate(){
+  let X;try{X=await loadXLSX()}catch(e){return toast('مش قادر أحمّل أداة Excel — اتأكد من النت')}
+  const ws=X.utils.aoa_to_sheet([XL_COLS.map(c=>c[1]),['','محمد أحمد','01012345678','حديد','',dshow(today()),1,'',400,200,'مثال — امسح السطر ده']]);
+  ws['!cols']=XL_COLS.map(()=>({wch:16}));
+  const wb=X.utils.book_new();wb.Workbook={Views:[{RTL:true}]};X.utils.book_append_sheet(wb,ws,'الأعضاء');
+  X.writeFile(wb,'keepfit-members-template.xlsx');
+}
+function xlDate(v,X){
+  if(v==null||v==='') return '';
+  if(v instanceof Date&&!isNaN(v)) return ymd(new Date(v.getTime()+12*3600e3));
+  if(typeof v==='number'){const d=X.SSF.parse_date_code(v);return d?`${d.y}-${pad(d.m)}-${pad(d.d)}`:''}
+  const m=String(v).trim().match(/^(\d{1,4})[\/\-.](\d{1,2})[\/\-.](\d{1,4})/);if(!m) return null;
+  let [_,a,b,c]=m; if(a.length===4) return `${a}-${pad(+b)}-${pad(+c)}`; if(c.length===2) c='20'+c; return `${c}-${pad(+b)}-${pad(+a)}`;
+}
+const xlNum=v=>{if(v===''||v==null) return 0;const n=+String(v).replace(/[,\s٬]/g,'').replace(/[٠-٩]/g,d=>'٠١٢٣٤٥٦٧٨٩'.indexOf(d));return isNaN(n)?NaN:n};
+let XL_ROWS=[];
+async function xlRead(inp){
+  const f=inp.files[0];inp.value='';if(!f) return;
+  let X;try{X=await loadXLSX()}catch(e){return toast('مش قادر أحمّل أداة Excel — اتأكد من النت')}
+  let rows;try{const wb=X.read(await f.arrayBuffer(),{type:'array',cellDates:true});rows=X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,raw:true,defval:''})}catch(e){return toast('الملف ده مش Excel سليم')}
+  const hi=rows.findIndex(r=>r.some(c=>XL_ALIAS.name.includes(xlNorm(c))));
+  if(hi<0) return toast('مش لاقي عمود "الاسم" في الملف — استخدم النموذج');
+  const map={};rows[hi].forEach((c,i)=>{const n=xlNorm(c);for(const [k,al] of Object.entries(XL_ALIAS)) if(al.map(xlNorm).includes(n)&&map[k]==null) map[k]=i});
+  if(map.phone==null) return toast('مش لاقي عمود "الموبايل" في الملف');
+  const phones=new Set(DB.members.map(m=>m.phone)),codes=new Set(DB.members.map(m=>m.code)),fPh=new Set(),fCo=new Set();
+  XL_ROWS=[];
+  rows.slice(hi+1).forEach((r,k)=>{
+    const g=key=>map[key]==null?'':r[map[key]];
+    if(r.every(c=>String(c).trim()==='')) return;
+    const o={line:hi+k+2,code:String(g('code')).trim(),name:String(g('name')).trim(),phone:String(g('phone')).replace(/\D/g,''),activity:String(g('activity')).trim(),trainer:String(g('trainer')).trim(),notes:String(g('notes')).trim()};
+    if(/^1\d{9}$/.test(o.phone)) o.phone='0'+o.phone;
+    o.start=xlDate(g('start'),X);o.end=xlDate(g('end'),X);o.months=xlNum(g('months'));o.paid=xlNum(g('paid'));o.left=xlNum(g('left'));const tot=xlNum(g('total'));
+    const errs=[];
+    if(/مثال/.test(o.notes)) errs.push('سطر المثال');
+    if(!o.name) errs.push('الاسم ناقص');
+    if(!o.phone) errs.push('الموبايل ناقص');
+    else if(phones.has(o.phone)) errs.push('الرقم متسجل في السيستم');
+    else if(fPh.has(o.phone)) errs.push('الرقم متكرر في الملف');
+    if(o.code&&(codes.has(o.code)||fCo.has(o.code))) errs.push('الكود متكرر');
+    if(o.start===null||o.end===null) errs.push('تاريخ مش مفهوم (اكتبه يوم/شهر/سنة)');
+    if(isNaN(o.paid)||isNaN(o.left)||isNaN(o.months)||isNaN(tot)) errs.push('رقم مش مفهوم');
+    if(!errs.length){
+      o.hasSub=!!(o.activity||o.start||o.end||o.paid||o.left||tot);
+      if(!o.left&&tot>o.paid) o.left=tot-o.paid;
+      if(o.hasSub){o.start=o.start||today();if(!o.end){const n=o.months>0?o.months:1;o.end=endOf(o.start,n,'m');o.len=n}else{o.len=o.months>0?o.months:Math.max(1,Math.round(dBetween(o.start,o.end)/30))}
+        if(o.end<o.start) errs.push('تاريخ النهاية قبل البداية');}
+    }
+    o.errs=errs; if(!errs.length){fPh.add(o.phone);if(o.code) fCo.add(o.code)}
+    XL_ROWS.push(o);
+  });
+  const ok=XL_ROWS.filter(o=>!o.errs.length),bad=XL_ROWS.length-ok.length;
+  openModal('مراجعة ملف Excel',`<div class="stats"><div class="stat good"><span>جاهزين للاستيراد</span><b>${ok.length}</b></div><div class="stat ${bad?'bad':''}"><span>فيهم مشكلة (مش هيتسجلوا)</span><b>${bad}</b></div><div class="stat"><span>إجمالي المتبقي</span><b>${fmt(sum(ok.map(o=>o.left)))}</b><small>ج.م</small></div></div>
+    <div class="tbl" style="max-height:50vh;overflow:auto">${'<table><thead><tr><th class="num">السطر</th><th>الاسم</th><th>الموبايل</th><th>التمرين</th><th>من</th><th>إلى</th><th class="num">المدفوع</th><th class="num">المتبقي</th><th>الحالة</th></tr></thead><tbody>'+XL_ROWS.slice(0,500).map(o=>`<tr><td class="num">${o.line}</td><td>${esc(o.name)}</td><td class="num">${esc(o.phone)}</td><td>${esc(o.activity||'—')}</td><td class="num">${o.hasSub?dshow(o.start):'—'}</td><td class="num">${o.hasSub?dshow(o.end):'—'}</td><td class="num">${fmt(o.paid)}</td><td class="num">${fmt(o.left)}</td><td>${o.errs.length?`<span class="chip bad">${esc(o.errs.join('، '))}</span>`:'<span class="chip ok">تمام</span>'}</td></tr>`).join('')+'</tbody></table>'}</div>
+    <div class="form-end">${ok.length?`<button class="btn primary" onclick="xlImport()">استيراد ${ok.length} عضو</button>`:''}<button class="btn ghost" onclick="closeModal()">إلغاء</button></div>`);
+}
+function xlImport(){
+  const ok=XL_ROWS.filter(o=>!o.errs.length);if(!ok.length) return;
+  const trByName=n=>{if(!n) return '';let t=DB.trainers.find(x=>x.name.trim()===n);if(!t){t={id:uid(),name:n,phone:'',active:true};DB.trainers.push(t)}return t.id};
+  ok.forEach(o=>{
+    let code=o.code; if(!code){while(DB.members.some(m=>m.code===String(DB.settings.nextCode))) DB.settings.nextCode++; code=String(DB.settings.nextCode++)} else if(+code>=DB.settings.nextCode) DB.settings.nextCode=+code+1;
+    const mid=uid();DB.members.push({id:mid,code,name:o.name,phone:o.phone,gender:'ذكر',notes:o.notes,createdAt:today()});
+    if(o.hasSub){
+      if(o.activity&&!DB.activities.includes(o.activity)) DB.activities.push(o.activity);
+      const sid=uid();DB.subs.push({id:sid,memberId:mid,planId:'',planName:'رصيد افتتاحي',activity:o.activity||DB.activities[0]||'',trainerId:trByName(o.trainer),start:o.start,len:o.len,unit:'m',end:o.end,total:(o.paid||0)+(o.left||0),note:'مستورد من Excel',by:ME.name,createdAt:today()});
+      if(o.paid>0) DB.payments.push({id:uid(),memberId:mid,subId:sid,amount:o.paid,date:o.start,method:'كاش',note:'رصيد افتتاحي (Excel)',opening:true,by:ME.name});
+    }
+  });
+  closeModal();commit('استيراد Excel',`${ok.length} عضو`);toast(`اتسجل ${ok.length} عضو من ملف Excel`);
 }
 function clearDemo(){
   confirmBox('هيتمسح كل الأعضاء والاشتراكات والدفعات والحضور والمصاريف وسجل الحركات بتاعة الأمثلة. الإعدادات والمستخدمين والصلاحيات هتفضل. متأكد؟',()=>{
