@@ -189,14 +189,16 @@ textarea{min-height:140px;font-family:ui-monospace,Consolas,monospace;font-size:
 /* ============ ثوابت الصلاحيات ============ */
 const MODULES=[
   {key:'home',name:'إحصائيات الصفحة الرئيسية',acts:['view']},
-  {key:'members',name:'الأعضاء',acts:['view','add','edit','delete']},
+  {key:'members',name:'المشتركين',acts:['view','add','edit','delete']},
   {key:'subs',name:'الاشتراكات',acts:['view','add','edit','delete']},
+  {key:'subs_custom',name:'تغيير مدة وسعر وحصص الاشتراك يدوي (بدل الباقة)',acts:['edit']},
   {key:'payments',name:'الدفعات',acts:['view','add','delete']},
   {key:'money',name:'رؤية المبالغ المالية',acts:['view']},
   {key:'attendance',name:'الحضور',acts:['view','add','delete']},
   {key:'expenses',name:'المصاريف',acts:['view','add','edit','delete']},
-  {key:'rep_mem',name:'تقرير الأعضاء',acts:['view']},
+  {key:'rep_mem',name:'تقرير المشتركين',acts:['view']},
   {key:'rep_daily',name:'التقرير المالي اليومي',acts:['view']},
+  {key:'rep_exp',name:'تقرير المصاريف',acts:['view']},
   {key:'rep_admin',name:'تقارير الإدارة',acts:['view']},
   {key:'partners',name:'جاري الشركاء (المسحوبات)',acts:['view','add','edit','delete']},
   {key:'adjust',name:'إيرادات ومصروفات إدارية (برا اليومية)',acts:['view','add','edit','delete']},
@@ -208,16 +210,16 @@ const ACTS={view:'يشوف',add:'يضيف',edit:'يعدّل',delete:'يمسح'};
 const METHODS=['كاش','إنستاباي'];
 const NAV=[
   {v:'home',label:'الرئيسية'},
-  {v:'members',label:'الأعضاء',mod:['members']},
+  {v:'members',label:'المشتركين',mod:['members']},
   {v:'expenses',label:'المصاريف',mod:['expenses']},
-  {v:'reports',label:'التقارير',mod:['rep_mem','rep_daily','rep_admin']},
+  {v:'reports',label:'التقارير',mod:['rep_mem','rep_daily','rep_exp','rep_admin']},
   {v:'partners',label:'الشركاء',mod:['partners']},
   {v:'settings',label:'الإعدادات',mod:['settings']},
   {v:'users',label:'المستخدمين والصلاحيات',mod:['users']},
   {v:'audit',label:'سجل الحركات',mod:['audit']},
 ];
 let DB, ME=null, VIEW='home', ARG=null;
-const F={d1:'',d2:'',pf:'',pt:'',pp:'',mq:'',ms:'all',em:'',ec:'',rm:'',au:'',aq:'',role:'manager',rt:'fin'};
+const F={mf:'',mt:'',d1:'',d2:'',pf:'',pt:'',pp:'',mq:'',ms:'all',em:'',ec:'',rm:'',au:'',aq:'',role:'manager',rt:'fin'};
 
 /* ============ أدوات ============ */
 const $=s=>document.querySelector(s);
@@ -241,6 +243,7 @@ const monthName=m=>{const [y,mm]=m.split('-');return MONTHS[+mm-1]+' '+y};
 
 /* ============ التخزين ============ */
 function migrate(){
+  upgradeRoles();
   // إصلاح وحدة المدة اللي اتحفظت غلط في النسخة الأولى
   DB.subs.forEach(s=>{if(String(s.unit).includes(',')){s.unit=String(s.unit).split(',')[0];s.end=endOf(s.start,s.len,s.unit);}});
   DB.plans.forEach(p=>{if(String(p.unit).includes(',')) p.unit=String(p.unit).split(',')[0];});
@@ -328,7 +331,7 @@ window.APP={
   onConfig(cfg){applyConfig(cfg)},
   onData(changes,local){
     applyShards(changes);
-    if(STATE==='loading-data'){STATE='app';log('دخول','تسجيل دخول');save();render();return}
+    if(STATE==='loading-data'){STATE='app';upgradeRoles();log('دخول','تسجيل دخول');save();render();return}
     if(STATE==='app'&&!local) softRender();
   },
   onLoadingData(){STATE='loading-data';render()},
@@ -343,7 +346,7 @@ function seed(){
     settings:{gymName:'Keep Fit',currency:'ج.م',nextCode:1001},
     roles:[
       {id:'admin',name:'أدمن',locked:true,ownOnly:false,perms:all},
-      {id:'owner',name:'صاحب الجيم',ownOnly:false,perms:{home:['view'],members:['view'],subs:['view'],payments:['view'],money:['view'],attendance:['view'],expenses:['view','add','edit','delete'],rep_mem:['view'],rep_daily:['view'],rep_admin:['view'],partners:['view','add','edit','delete'],settings:['view'],audit:['view']}},
+      {id:'owner',name:'صاحب الجيم',ownOnly:false,perms:{home:['view'],members:['view'],subs:['view'],payments:['view'],money:['view'],attendance:['view'],expenses:['view','add','edit','delete'],rep_mem:['view'],rep_daily:['view'],rep_exp:['view'],rep_admin:['view'],partners:['view','add','edit','delete'],settings:['view'],audit:['view']}},
       {id:'manager',name:'مدير الجيم',ownOnly:false,perms:{home:['view'],members:['view','add','edit'],subs:['view','add','edit'],payments:['view','add'],money:['view'],attendance:['view','add'],expenses:['view','add'],rep_mem:['view'],rep_daily:['view'],settings:['view']}},
       {id:'trainer',name:'مدرب',ownOnly:true,perms:{home:['view'],members:['view'],subs:['view'],attendance:['view','add'],rep_mem:['view']}},
     ],
@@ -397,6 +400,7 @@ function seed(){
 }
 
 /* ============ صلاحيات ============ */
+function upgradeRoles(){let ch=false;(DB.roles||[]).forEach(r=>{if(r.perms&&r.perms.rep_admin&&!r.perms.rep_exp){r.perms.rep_exp=['view'];ch=true}});return ch}
 const role=()=>DB.roles.find(r=>r.id===ME?.roleId)||{perms:{}};
 function can(mod,act='view'){ if(!ME) return false; const r=role(); if(r.id==='admin') return true; return (r.perms[mod]||[]).includes(act); }
 const money=n=>can('money')?fmt(n)+' ج.م':'••••';
@@ -523,11 +527,11 @@ function logout(){FB.logout()}
 /* ============ الرئيسية ============ */
 function vHome(){
   let h=`<section class="search-hero">
-    <h1>دوّر على عميل</h1>
-    <p class="muted" style="margin:0">اكتب كود العميل أو رقم الموبايل واضغط Enter</p>
-    <form class="search" onsubmit="event.preventDefault();goSearch()"><input id="q" autocomplete="off" placeholder="مثال: 1001 أو 01012345678" oninput="liveSearch()" aria-label="كود العميل أو رقم الموبايل"><button class="btn primary">فتح</button></form>
+    <h1>دوّر على مشترك</h1>
+    <p class="muted" style="margin:0">اكتب كود المشترك أو رقم الموبايل واضغط Enter</p>
+    <form class="search" onsubmit="event.preventDefault();goSearch()"><input id="q" autocomplete="off" placeholder="مثال: 1001 أو 01012345678" oninput="liveSearch()" aria-label="كود المشترك أو رقم الموبايل"><button class="btn primary">فتح</button></form>
     <div id="qres" class="results"></div>
-    <div class="row">${can('members','add')?`<button class="btn" onclick="memberForm()">+ عضو جديد</button>`:''}</div>
+    <div class="row">${can('members','add')?`<button class="btn" onclick="memberForm()">+ مشترك جديد</button>`:''}</div>
   </section>`;
   if(can('home')){
     const vm=visibleMembers(),ids=new Set(vm.map(m=>m.id)),t=today();
@@ -538,9 +542,9 @@ function vHome(){
     const owe=sum(vm.map(m=>memberBalance(m.id)));
     h+=`<div class="stats">
       <div class="stat"><span>حضور النهارده</span><b>${att.length}</b><small>${dshow(t)}</small></div>
-      <div class="stat good"><span>اشتراكات سارية</span><b>${active.length}</b><small>من ${vm.length} عضو</small></div>
+      <div class="stat good"><span>اشتراكات سارية</span><b>${active.length}</b><small>من ${vm.length} مشترك</small></div>
       <div class="stat"><span>بتخلص خلال 7 أيام</span><b>${ending.length}</b><small>محتاجين تجديد</small></div>
-      ${can('money')?`<div class="stat bad"><span>مبالغ متبقية على الأعضاء</span><b>${fmt(owe)}</b><small>ج.م</small></div>`:''}
+      ${can('money')?`<div class="stat bad"><span>مبالغ متبقية على المشتركين</span><b>${fmt(owe)}</b><small>ج.م</small></div>`:''}
     </div>
     <div class="cards2">
       <div class="card"><h2>حضور النهارده</h2>${table('tToday',['الساعة','الكود','الاسم'],att.map(a=>{const m=memberById(a.memberId);return `<tr class="click" onclick="go('member','${a.memberId}')"><td class="num">${a.time}</td><td class="num">${esc(m?.code)}</td><td>${esc(m?.name)}</td></tr>`}),{empty:'محدش سجّل حضور النهارده لسه'})}</div>
@@ -564,15 +568,15 @@ function goSearch(){
   if(exact) return go('member',exact.id);
   const r=findMembers(q);
   if(r.length===1) return go('member',r[0].id);
-  if(!r.length) toast('مفيش عميل بالكود أو الرقم ده');
+  if(!r.length) toast('مفيش مشترك بالكود أو الرقم ده');
 }
 
-/* ============ الأعضاء ============ */
+/* ============ المشتركين ============ */
 function vMembers(){
-  return `<div class="row between"><h1>الأعضاء</h1>${can('members','add')?`<button class="btn primary" onclick="memberForm()">+ عضو جديد</button>`:''}</div>
+  return `<div class="row between"><h1>المشتركين</h1>${can('members','add')?`<button class="btn primary" onclick="memberForm()">+ مشترك جديد</button>`:''}</div>
   <div class="row">
     <input class="in" style="max-width:280px" placeholder="بحث بالاسم أو الكود أو الموبايل" value="${esc(F.mq)}" oninput="F.mq=this.value;drawMembers()" aria-label="بحث">
-    <select class="in" style="max-width:200px" onchange="F.ms=this.value;drawMembers()" aria-label="الحالة">${opts([['all','كل الأعضاء'],['active','ساري'],['ending','قرب يخلص'],['expired','منتهي'],['owe','عليهم فلوس']].filter(o=>o[0]!=='owe'||can('money')),F.ms,0,1)}</select>
+    <select class="in" style="max-width:200px" onchange="F.ms=this.value;drawMembers()" aria-label="الحالة">${opts([['all','كل المشتركين'],['active','ساري'],['ending','قرب يخلص'],['expired','منتهي'],['owe','عليهم فلوس']].filter(o=>o[0]!=='owe'||can('money')),F.ms,0,1)}</select>
     <span class="spacer"></span>${copyBtn('tMem')}
   </div>
   <div id="mt"></div>`;
@@ -586,14 +590,14 @@ function drawMembers(){
   else if(F.ms!=='all') list=list.filter(x=>x.st===F.ms);
   list.sort((a,b)=>(+a.m.code)-(+b.m.code));
   const heads=['#الكود','الاسم','الموبايل','بيتمرن','الكابتن','#نهاية الاشتراك','#حصص فاضلة','الحالة'].concat(can('money')?['#الباقي عليه']:[]);
-  $('#mt').innerHTML=table('tMem',heads,list.map(({m,s,bal,st})=>`<tr class="click" onclick="go('member','${m.id}')"><td class="num">${esc(m.code)}</td><td>${esc(m.name)}</td><td class="num">${esc(m.phone)}</td><td>${esc(s?.activity||'—')}</td><td>${esc(s?trainerName(s.trainerId):'—')}</td><td class="num">${dshow(s?.end)}</td><td class="num">${s&&+s.sessions>0?subSessLeft(s):'—'}</td><td>${chip(st)}</td>${can('money')?`<td class="num">${bal>0?`<b style="color:var(--bad)">${fmt(bal)}</b>`:'0'}</td>`:''}</tr>`),{empty:'مفيش أعضاء بالشروط دي'})+`<p class="muted" style="margin:6px 0 0">${list.length} عضو</p>`;
+  $('#mt').innerHTML=table('tMem',heads,list.map(({m,s,bal,st})=>`<tr class="click" onclick="go('member','${m.id}')"><td class="num">${esc(m.code)}</td><td>${esc(m.name)}</td><td class="num">${esc(m.phone)}</td><td>${esc(s?.activity||'—')}</td><td>${esc(s?trainerName(s.trainerId):'—')}</td><td class="num">${dshow(s?.end)}</td><td class="num">${s&&+s.sessions>0?subSessLeft(s):'—'}</td><td>${chip(st)}</td>${can('money')?`<td class="num">${bal>0?`<b style="color:var(--bad)">${fmt(bal)}</b>`:'0'}</td>`:''}</tr>`),{empty:'مفيش مشتركين بالشروط دي'})+`<p class="muted" style="margin:6px 0 0">${list.length} مشترك</p>`;
 }
 function memberForm(id){
   const m=id?memberById(id):null;
   const v=m||{code:String(DB.settings.nextCode),name:'',phone:'',gender:'ذكر',notes:''};
-  openForm(m?'تعديل بيانات العضو':'عضو جديد',`<div class="grid2">
-    ${fld('كود العميل',`<input name="code" value="${esc(v.code)}" required inputmode="numeric">`)}
-    ${fld('الاسم',`<input name="name" value="${esc(v.name)}" required>`)}
+  openForm(m?'تعديل بيانات المشترك':'مشترك جديد',`<div class="grid2">
+    ${fld('كود المشترك',`<input name="code" value="${esc(v.code)}" required inputmode="numeric">`)}
+    ${fld('اسم المشترك',`<input name="name" value="${esc(v.name)}" required>`)}
     ${fld('رقم الموبايل',`<input name="phone" value="${esc(v.phone)}" required inputmode="tel">`)}
     ${fld('النوع',`<select name="gender">${opts(['ذكر','أنثى'],v.gender)}</select>`)}
     ${m?'':fld('هيتمرن إيه',`<select name="activity">${opts(DB.activities,DB.activities[0])}</select>`)}
@@ -601,34 +605,35 @@ function memberForm(id){
   </div>`,fd=>{
     fd.code=fd.code.trim();fd.name=fd.name.trim();fd.phone=fd.phone.trim();
     if(!fd.code||!fd.name||!fd.phone) return 'الكود والاسم والموبايل مطلوبين';
-    if(DB.members.some(x=>x.code===fd.code&&x.id!==id)) return 'الكود ده متسجل لعضو تاني';
-    if(DB.members.some(x=>x.phone===fd.phone&&x.id!==id)) return 'رقم الموبايل ده متسجل لعضو تاني';
-    if(m){Object.assign(m,fd);commit('تعديل عضو',`${fd.name} (${fd.code})`);toast('اتحفظت التعديلات');return;}
+    if(DB.members.some(x=>x.code===fd.code&&x.id!==id)) return 'الكود ده متسجل لمشترك تاني';
+    if(DB.members.some(x=>x.phone===fd.phone&&x.id!==id)) return 'رقم الموبايل ده متسجل لمشترك تاني';
+    if(m){Object.assign(m,fd);commit('تعديل مشترك',`${fd.name} (${fd.code})`);toast('اتحفظت التعديلات');return;}
     const {activity:_a,...fdm}=fd;const nm={id:uid(),...fdm,createdAt:today()};DB.members.push(nm);
     if(+fd.code>=DB.settings.nextCode) DB.settings.nextCode=+fd.code+1;
-    log('إضافة عضو',`${fd.name} (${fd.code})`);save();
+    log('إضافة مشترك',`${fd.name} (${fd.code})`);save();
     const act=fd.activity;setTimeout(()=>{go('member',nm.id);if(can('subs','add')) subForm(nm.id,null,act);},0);
   },m?'حفظ':'حفظ وافتح الاشتراك');
 }
 function delMember(id){
+  if(!can('members','delete')||(DB.payments.some(p=>p.memberId===id)&&!can('payments','delete'))) return toast('مش مسموح لك تمسح المشترك ده');
   const m=memberById(id);
   confirmBox(`هيتمسح <b>${esc(m.name)}</b> وكل اشتراكاته ودفعاته وحضوره. متأكد؟`,()=>{
     DB.members=DB.members.filter(x=>x.id!==id);DB.subs=DB.subs.filter(x=>x.memberId!==id);DB.payments=DB.payments.filter(x=>x.memberId!==id);DB.attendance=DB.attendance.filter(x=>x.memberId!==id);
-    log('مسح عضو',`${m.name} (${m.code})`);save();go('members');toast('اتمسح العضو');
+    log('مسح مشترك',`${m.name} (${m.code})`);save();go('members');toast('اتمسح المشترك');
   });
 }
 
-/* ============ صفحة العضو ============ */
+/* ============ صفحة المشترك ============ */
 function vMember(id){
   const m=memberById(id);
-  if(!m||!visibleMembers().includes(m)) return `<div class="card"><p>العميل ده مش موجود أو مش متاح ليك.</p><button class="btn" onclick="go('home')">رجوع للرئيسية</button></div>`;
+  if(!m||!visibleMembers().includes(m)) return `<div class="card"><p>المشترك ده مش موجود أو مش متاح ليك.</p><button class="btn" onclick="go('home')">رجوع للرئيسية</button></div>`;
   const t=today(),cur=currentSub(id),st=subStatus(cur),subs=memberSubs(id);
   const pays=DB.payments.filter(p=>p.memberId===id).sort((a,b)=>b.date.localeCompare(a.date));
   const att=DB.attendance.filter(a=>a.memberId===id).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
   const curAtt=cur?att.filter(a=>a.date>=cur.start&&a.date<=cur.end).length:0;
   const bal=memberBalance(id), todayIn=att.find(a=>a.date===t);
   let h=`<div class="row"><button class="btn sm ghost" onclick="go('home')">→ رجوع</button></div>
-  <div class="mcard"><div class="mcode"><span>كود العميل</span><b>${esc(m.code)}</b></div>
+  <div class="mcard"><div class="mcode"><span>كود المشترك</span><b>${esc(m.code)}</b></div>
    <div class="minfo"><div class="row"><h1>${esc(m.name)}</h1>${chip(st)}${todayIn?`<span class="chip ok">حضر النهارده ${todayIn.time}</span>`:''}</div>
    <div class="muted num">${esc(m.phone)} · ${esc(m.gender||'')}${m.notes?' · '+esc(m.notes):''}</div>
    <div class="row">
@@ -637,7 +642,7 @@ function vMember(id){
      ${can('payments','add')&&can('money')?`<button class="btn" onclick="payForm('${id}')">تسجيل دفعة</button>`:''}
      <span class="spacer"></span>
      ${can('members','edit')?`<button class="btn sm" onclick="memberForm('${id}')">تعديل البيانات</button>`:''}
-     ${can('members','delete')?`<button class="btn sm danger" onclick="delMember('${id}')">مسح العضو</button>`:''}
+     ${can('members','delete')&&(can('payments','delete')||!pays.length)?`<button class="btn sm danger" onclick="delMember('${id}')">مسح المشترك</button>`:''}
    </div></div></div>`;
   if(cur&&can('subs')){
     const left=cur.end<t?0:dBetween(t,cur.end)+(cur.start>t?0:0);
@@ -656,7 +661,7 @@ function vMember(id){
   }
   if(can('subs')){
     const heads=['الباقة','بيتمرن','الكابتن','#من','#إلى','#الحصص','الحالة'].concat(can('money')?['#القيمة','#المدفوع','#الباقي']:[]).concat(['']);
-    h+=`<div class="tblbox"><div class="row between"><h2>الاشتراكات (${subs.length})</h2>${copyBtn('tSubs')}</div>${table('tSubs',heads,subs.map(s=>`<tr><td>${esc(s.planName||'مخصص')}</td><td>${esc(s.activity)}</td><td>${esc(trainerName(s.trainerId))}</td><td class="num">${dshow(s.start)}</td><td class="num">${dshow(s.end)}</td><td class="num">${sessTxt(s)}</td><td>${chip(subStatus(s))}</td>${can('money')?`<td class="num">${fmt(s.total)}</td><td class="num">${fmt(subPaid(s.id))}</td><td class="num">${subLeft(s)>0?`<b style="color:var(--bad)">${fmt(subLeft(s))}</b>`:'0'}</td>`:''}<td>${can('subs','edit')?`<button class="btn sm" onclick="subForm('${id}','${s.id}')">تعديل</button>`:''} ${can('subs','delete')?`<button class="btn sm danger" onclick="delSub('${s.id}')">مسح</button>`:''}</td></tr>`),{empty:'مفيش اشتراكات'})}</div>`;
+    h+=`<div class="tblbox"><div class="row between"><h2>الاشتراكات (${subs.length})</h2>${copyBtn('tSubs')}</div>${table('tSubs',heads,subs.map(s=>`<tr><td>${esc(s.planName||'مخصص')}</td><td>${esc(s.activity)}</td><td>${esc(trainerName(s.trainerId))}</td><td class="num">${dshow(s.start)}</td><td class="num">${dshow(s.end)}</td><td class="num">${sessTxt(s)}</td><td>${chip(subStatus(s))}</td>${can('money')?`<td class="num">${fmt(s.total)}</td><td class="num">${fmt(subPaid(s.id))}</td><td class="num">${subLeft(s)>0?`<b style="color:var(--bad)">${fmt(subLeft(s))}</b>`:'0'}</td>`:''}<td>${can('subs','edit')?`<button class="btn sm" onclick="subForm('${id}','${s.id}')">تعديل</button>`:''} ${can('subs','delete')&&(can('payments','delete')||!DB.payments.some(p=>p.subId===s.id))?`<button class="btn sm danger" onclick="delSub('${s.id}')">مسح</button>`:''}</td></tr>`),{empty:'مفيش اشتراكات'})}</div>`;
   }
   if(can('payments')&&can('money')){
     h+=`<div class="tblbox"><div class="row between"><h2>الدفعات (${pays.length})</h2>${copyBtn('tPays')}</div>${table('tPays',['#التاريخ','#المبلغ','الطريقة','للاشتراك','سجّلها','ملاحظات',''],pays.map(p=>{const s=DB.subs.find(x=>x.id===p.subId);return `<tr><td class="num">${dshow(p.date)}</td><td class="num">${fmt(p.amount)}</td><td>${esc(p.method)}</td><td>${esc(s?(s.planName+' · '+dshow(s.start)):'—')}</td><td>${esc(p.by)}</td><td>${esc(p.note)}</td><td>${can('payments','delete')?`<button class="btn sm danger" onclick="delPay('${p.id}')">مسح</button>`:''}</td></tr>`}),{empty:'مفيش دفعات',foot:['الإجمالي',fmt(sum(pays.map(p=>p.amount))),'','','','','']})}</div>`;
@@ -679,7 +684,7 @@ function checkIn(mid){
   if(sl!==null) return toast(sl<=0?'اتسجل الحضور — دي كانت آخر حصة في الاشتراك':`اتسجل الحضور — فاضل ${sl} حصة`);
   toast(st==='expired'||st==='none'?'اتسجل الحضور — بس خلي بالك: الاشتراك منتهي':st==='ending'?'اتسجل الحضور — الاشتراك قرب يخلص':'اتسجل الحضور');
 }
-function delAtt(aid){const a=DB.attendance.find(x=>x.id===aid),m=memberById(a.memberId);confirmBox(`مسح حضور يوم ${dshow(a.date)}؟`,()=>{DB.attendance=DB.attendance.filter(x=>x.id!==aid);commit('مسح حضور',`${m?.name} يوم ${dshow(a.date)}`)})}
+function delAtt(aid){if(!can('attendance','delete')) return toast('مش مسموح لك تمسح حضور');const a=DB.attendance.find(x=>x.id===aid),m=memberById(a.memberId);confirmBox(`مسح حضور يوم ${dshow(a.date)}؟`,()=>{DB.attendance=DB.attendance.filter(x=>x.id!==aid);commit('مسح حضور',`${m?.name} يوم ${dshow(a.date)}`)})}
 
 /* ============ الاشتراكات والدفعات ============ */
 function subForm(mid,sid,actIn){
@@ -689,24 +694,32 @@ function subForm(mid,sid,actIn){
   const act0=actIn||cur?.activity||DB.activities[0]||'', pp=plansFor(act0)[0];
   const v=s||{planId:pp?.id||'',activity:act0,trainerId:cur?.trainerId||'',start,len:pp?.len||1,unit:pp?.unit||'m',sessions:pp?.sessions||0,total:pp?.price||0,note:''};
   const tr=DB.trainers.filter(x=>x.active||x.id===v.trainerId);
-  const showMoney=!s||can('money');
+  const showMoney=!s||can('money'), free=can('subs_custom','edit'), lk=free?'':' readonly tabindex="-1"';
+  if(!free&&!s&&!DB.plans.length) return toast('مفيش باقات متسجلة — الأدمن يضيفها من الإعدادات');
   openForm(s?'تعديل الاشتراك':`اشتراك جديد — ${m.name}`,`<div class="grid2">
     ${fld('بيتمرن إيه',`<select name="activity" id="sf_act" onchange="sfAct()">${opts(DB.activities,v.activity)}</select>`)}
-    ${fld('الباقة',`<select name="planId" id="sf_plan" onchange="sfPlan()">${planOpts(v.activity,v.planId)}</select>`)}
+    ${fld('الباقة',`<select name="planId" id="sf_plan" onchange="sfPlan()">${planOpts(v.activity,v.planId,free)}</select>`)}
     ${fld('اسم الكابتن',`<select name="trainerId"><option value="">بدون كابتن</option>${opts(tr,v.trainerId,'id','name')}</select>`)}
     ${fld('تاريخ البداية',`<input type="date" name="start" id="sf_start" value="${v.start}" required oninput="sfCalc()">`)}
-    ${fld('المدة',`<div class="pair"><input type="number" min="1" name="len" id="sf_len" value="${v.len}" required oninput="sfCalc()"><select name="unit" id="sf_unit" onchange="sfCalc()">${opts([['m','شهر'],['d','يوم']],v.unit,0,1)}</select></div>`)}
+    ${fld('المدة',`<div class="pair"><input type="number" min="1" name="len" id="sf_len" value="${v.len}" required oninput="sfCalc()"${lk}><select name="unit" id="sf_unit" onchange="sfCalc()"${free?'':' disabled'}>${opts([['m','شهر'],['d','يوم']],v.unit,0,1)}</select></div>`)}
     ${fld('تاريخ النهاية (بيتحسب لوحده)',`<input id="sf_end" readonly tabindex="-1">`)}
-    ${fld('عدد الحصص (0 = مفتوح)',`<input type="number" min="0" name="sessions" id="sf_ses" value="${+v.sessions||0}">`)}
-    ${showMoney?fld('قيمة الاشتراك الإجمالية (ج.م)',`<input type="number" min="0" name="total" id="sf_total" value="${v.total}" required oninput="sfTot()">`):''}
+    ${fld('عدد الحصص (0 = مفتوح)',`<input type="number" min="0" name="sessions" id="sf_ses" value="${+v.sessions||0}"${lk}>`)}
+    ${showMoney?fld('قيمة الاشتراك الإجمالية (ج.م)',`<input type="number" min="0" name="total" id="sf_total" value="${v.total}" required oninput="sfTot()"${lk}>`):''}
+    ${free?'':'<p class="muted" id="sf_lock" style="grid-column:1/-1;margin:0">المدة والحصص والسعر بيتحددوا من الباقة تلقائي، وبيتغيّروا من الإعدادات بس.</p>'}
     ${!s&&can('payments','add')?fld('المدفوع دلوقتي (ج.م)',`<input type="number" min="0" name="paid" id="sf_paid" value="${v.total}" oninput="this.dataset.t=1;sfTot()">`)+fld('طريقة الدفع',`<select name="method">${opts(METHODS,'كاش')}</select>`)+`<p class="muted wide" id="sf_left" style="grid-column:1/-1;margin:0"></p>`:''}
     ${fld('ملاحظات',`<input name="note" value="${esc(v.note)}">`,true)}
   </div>`,fd=>{
+    if(!free){
+      const pl=DB.plans.find(p=>p.id===fd.planId);
+      if(s&&fd.planId===s.planId){fd.len=s.len;fd.unit=s.unit;fd.sessions=s.sessions||0;fd.total=s.total}
+      else if(!pl) return 'اختار باقة — لو مفيش باقة للتمرين ده، الأدمن يضيفها من الإعدادات';
+      else {fd.len=pl.len;fd.unit=pl.unit;fd.sessions=+pl.sessions||0;fd.total=pl.price}
+    }
     if(!fd.start||!(+fd.len>0)) return 'اكتب تاريخ البداية والمدة';
-    const total=showMoney?+fd.total||0:s.total, paid=+fd.paid||0;
+    const total=showMoney||!free?+fd.total||0:s.total, paid=+fd.paid||0;
     if(paid>total) return 'المدفوع أكبر من قيمة الاشتراك';
     const plan=DB.plans.find(p=>p.id===fd.planId);
-    const data={planId:fd.planId,planName:plan?plan.name:'مخصص',activity:fd.activity,trainerId:fd.trainerId,start:fd.start,len:+fd.len,unit:fd.unit,end:endOf(fd.start,fd.len,fd.unit),sessions:Math.max(0,+fd.sessions||0),total,note:fd.note};
+    const data={planId:fd.planId,planName:plan?planLabel(plan):'مخصص',activity:fd.activity,trainerId:fd.trainerId,start:fd.start,len:+fd.len,unit:fd.unit,end:endOf(fd.start,fd.len,fd.unit),sessions:Math.max(0,+fd.sessions||0),total,note:fd.note};
     if(s){Object.assign(s,data);commit('تعديل اشتراك',`${m.name}: ${data.planName} من ${dshow(data.start)}`);toast('اتعدّل الاشتراك');return;}
     const ns={id:uid(),memberId:mid,...data,by:ME.name,createdAt:today()};DB.subs.push(ns);
     log('اشتراك جديد',`${m.name}: ${data.planName} بـ ${fmt(total)} من ${dshow(data.start)} لـ ${dshow(data.end)}`);
@@ -715,19 +728,22 @@ function subForm(mid,sid,actIn){
   },s?'حفظ':'تسجيل الاشتراك');
   sfCalc();sfTot();
 }
-function plansFor(act){const own=DB.plans.filter(p=>p.activity&&p.activity===act),names=new Set(own.map(p=>p.name));return own.concat(DB.plans.filter(p=>!p.activity&&!names.has(p.name)))}
-function planOpts(act,sel){return `<option value="">مخصص</option>`+plansFor(act).map(p=>`<option value="${p.id}"${p.id===sel?' selected':''}>${esc(p.name)}${can('money')?' — '+fmt(p.price)+' ج.م':''}</option>`).join('')}
-function sfAct(){const act=$('#sf_act').value,cur=$('#sf_plan').value,list=plansFor(act);const curP=DB.plans.find(p=>p.id===cur);const pick=(curP&&list.find(p=>p.name===curP.name))||list[0];$('#sf_plan').innerHTML=planOpts(act,cur===''?'':(pick?.id||''));if(cur!=='')sfPlan()}
+const durTxt=(len,unit)=>unit==='d'?(+len===7?'أسبوع':len+' يوم'):(+len===1?'شهر':+len===12?'سنة':len+' شهور');
+const planLabel=p=>durTxt(p.len,p.unit)+(+p.sessions>0?` · ${p.sessions} حصة`:'');
+function plansFor(act){const own=DB.plans.filter(p=>p.activity&&p.activity===act),names=new Set(own.map(planLabel));return own.concat(DB.plans.filter(p=>!p.activity&&!names.has(planLabel(p))))}
+function planOpts(act,sel,free=true){return (free?`<option value="">مخصص</option>`:(plansFor(act).length?'':'<option value="">مفيش باقة للتمرين ده</option>'))+plansFor(act).map(p=>`<option value="${p.id}"${p.id===sel?' selected':''}>${esc(planLabel(p))}${can('money')?' — '+fmt(p.price)+' ج.م':''}</option>`).join('')}
+function sfAct(){const act=$('#sf_act').value,cur=$('#sf_plan').value,list=plansFor(act);const curP=DB.plans.find(p=>p.id===cur);const pick=(curP&&list.find(p=>p.name===curP.name))||list[0];const free=can('subs_custom','edit');$('#sf_plan').innerHTML=planOpts(act,cur===''&&free?'':(pick?.id||''),free);if(cur!==''||!free)sfPlan()}
 function sfPlan(){const p=DB.plans.find(x=>x.id===$('#sf_plan').value);if(!p) return;$('#sf_len').value=p.len;$('#sf_unit').value=p.unit;if($('#sf_ses')) $('#sf_ses').value=+p.sessions||0;if($('#sf_total')){$('#sf_total').value=p.price;}const pd=$('#sf_paid');if(pd&&!pd.dataset.t) pd.value=p.price;sfCalc();sfTot()}
 function sfCalc(){const s=$('#sf_start')?.value,l=$('#sf_len')?.value,u=$('#sf_unit')?.value;if(s&&+l>0) $('#sf_end').value=dshow(endOf(s,l,u))}
 function sfTot(){const t=$('#sf_total'),p=$('#sf_paid'),o=$('#sf_left');if(!t||!p) return;if(!p.dataset.t) p.value=t.value;const left=(+t.value||0)-(+p.value||0);if(o) o.innerHTML=left>0?`هيبقى باقي عليه <b style="color:var(--bad)">${fmt(left)} ج.م</b>`:left<0?'<span style="color:var(--bad)">المدفوع أكبر من القيمة</span>':'مدفوع بالكامل'}
 function delSub(sid){
+  if(!can('subs','delete')||(DB.payments.some(p=>p.subId===sid)&&!can('payments','delete'))) return toast('مش مسموح لك تمسح الاشتراك ده');
   const s=DB.subs.find(x=>x.id===sid),m=memberById(s.memberId),n=DB.payments.filter(p=>p.subId===sid).length;
   confirmBox(`مسح اشتراك ${esc(s.planName)} (${dshow(s.start)})${n?` و${n} دفعة مرتبطين بيه`:''}؟`,()=>{DB.subs=DB.subs.filter(x=>x.id!==sid);DB.payments=DB.payments.filter(p=>p.subId!==sid);commit('مسح اشتراك',`${m?.name}: ${s.planName} من ${dshow(s.start)} بقيمة ${fmt(s.total)}`)});
 }
 function payForm(mid){
   const m=memberById(mid),subs=memberSubs(mid).filter(s=>subLeft(s)>0);
-  if(!subs.length) return toast('مفيش مبالغ باقية على العضو ده');
+  if(!subs.length) return toast('مفيش مبالغ باقية على المشترك ده');
   openForm(`تسجيل دفعة — ${m.name}`,`<div class="grid2">
     ${fld('للاشتراك',`<select name="subId" id="pf_sub" onchange="$('#pf_amt').value=this.selectedOptions[0].dataset.l">${subs.map(s=>`<option value="${s.id}" data-l="${subLeft(s)}">${esc(s.planName)} · ${dshow(s.start)} · باقي ${fmt(subLeft(s))}</option>`).join('')}</select>`,true)}
     ${fld('المبلغ (ج.م)',`<input type="number" min="1" name="amount" id="pf_amt" value="${subLeft(subs[0])}" required>`)}
@@ -742,13 +758,22 @@ function payForm(mid){
     commit('دفعة',`${m.name}: ${fmt(a)} ج.م (${fd.method})`);toast(subLeft(s)>0?`اتسجلت الدفعة — باقي ${fmt(subLeft(s))} ج.م`:'اتسجلت الدفعة — الاشتراك اتدفع بالكامل');
   },'تسجيل الدفعة');
 }
-function delPay(pid){const p=DB.payments.find(x=>x.id===pid),m=memberById(p.memberId);confirmBox(`مسح دفعة ${fmt(p.amount)} ج.م بتاريخ ${dshow(p.date)}؟`,()=>{DB.payments=DB.payments.filter(x=>x.id!==pid);commit('مسح دفعة',`${m?.name}: ${fmt(p.amount)} ج.م بتاريخ ${dshow(p.date)}`)})}
+function delPay(pid){if(!can('payments','delete')) return toast('مش مسموح لك تمسح دفعات');const p=DB.payments.find(x=>x.id===pid),m=memberById(p.memberId);confirmBox(`مسح دفعة ${fmt(p.amount)} ج.م بتاريخ ${dshow(p.date)}؟`,()=>{DB.payments=DB.payments.filter(x=>x.id!==pid);commit('مسح دفعة',`${m?.name}: ${fmt(p.amount)} ج.م بتاريخ ${dshow(p.date)}`)})}
 
 /* ============ المصاريف ============ */
 function expRange(){const M=thisMonth();if(!F.ef) F.ef=M+'-01';if(!F.et) F.et=addDays(addMonths(M+'-01',1),-1);if(F.et<F.ef){const x=F.ef;F.ef=F.et;F.et=x}return [F.ef,F.et]}
 function expPresets(){const t=today(),M=thisMonth(),m1=M+'-01';return {today:['النهارده',t,t],week:['آخر 7 أيام',addDays(t,-6),t],month:['الشهر ده',m1,addDays(addMonths(m1,1),-1)],last:['الشهر اللي فات',addMonths(m1,-1),addDays(m1,-1)],year:['السنة دي',t.slice(0,4)+'-01-01',t.slice(0,4)+'-12-31']}}
 function expPreset(k){const r=expPresets()[k];F.ef=r[1];F.et=r[2];render()}
 function vExpenses(){
+  const t=today(),min=addDays(t,-9);
+  const list=DB.expenses.filter(e=>e.date>=min&&e.date<=t).sort((x,y)=>(y.date+(y.at||'')).localeCompare(x.date+(x.at||'')));
+  const tl=list.filter(e=>e.date===t);
+  return `<div class="row between"><h1>المصاريف</h1>${can('expenses','add')?`<button class="btn primary big" onclick="expForm()">+ مصروف جديد</button>`:''}</div>
+  <div class="stats"><div class="stat bad"><span>مصروف النهارده</span><b>${fmt(sum(tl.map(e=>e.amount)))}</b><small>${tl.length} بند · ج.م</small></div></div>
+  <p class="muted" style="margin:0">هنا بتظهر مصاريف آخر 10 أيام بس (من ${dshow(min)}).${can('rep_exp')?' التقارير الكاملة في: التقارير ← تقرير المصاريف.':''}</p>
+  ${table('tExpD',['#التاريخ','النوع','#المبلغ','البيان','سجّله',''],list.map(e=>`<tr><td class="num">${dshow(e.date)}</td><td>${esc(e.cat)}</td><td class="num">${fmt(e.amount)}</td><td>${esc(e.note)}</td><td>${esc(e.by)}</td><td>${can('expenses','edit')?`<button class="btn sm" onclick="expForm('${e.id}')">تعديل</button>`:''} ${can('expenses','delete')?`<button class="btn sm danger" onclick="delExp('${e.id}')">مسح</button>`:''}</td></tr>`),{empty:'مفيش مصاريف في آخر 10 أيام',copy:false})}`;
+}
+function repExpenses(){
   const [a,b]=expRange(), P=expPresets();
   const inR=DB.expenses.filter(e=>e.date>=a&&e.date<=b);
   const list=inR.filter(e=>!F.ec||e.cat===F.ec).sort((x,y)=>y.date.localeCompare(x.date));
@@ -756,7 +781,7 @@ function vExpenses(){
   const cats=[...new Set(DB.expenseCats.concat(inR.map(e=>e.cat)))].map(c=>[c,sum(inR.filter(e=>e.cat===c).map(e=>e.amount)),inR.filter(e=>e.cat===c).length]).filter(x=>x[1]>0).sort((x,y)=>y[1]-x[1]);
   const all=sum(inR.map(e=>e.amount)), maxC=Math.max(1,...cats.map(x=>x[1]));
   const label=a===b?dshow(a):`من ${dshow(a)} إلى ${dshow(b)}`;
-  return `<div class="row between"><h1>المصاريف</h1>${can('expenses','add')?`<button class="btn primary" onclick="expForm()">+ مصروف جديد</button>`:''}</div>
+  return `<h2>تقرير المصاريف</h2>
   <div class="card">
     <div class="tabs">${Object.entries(P).map(([k,v])=>`<button class="${v[1]===a&&v[2]===b?'on':''}" onclick="expPreset('${k}')">${v[0]}</button>`).join('')}</div>
     <div class="row">
@@ -781,56 +806,60 @@ function monthPicker(M,key){
 function expForm(id){
   const e=id?DB.expenses.find(x=>x.id===id):null;
   const v=e||{date:today(),cat:DB.expenseCats[0],amount:'',note:''};
+  const adm=ME.roleId==='admin', dmin=addDays(today(),-9);
+  if(e&&!adm&&e.date<dmin) return toast('مينفعش تعدّل مصروف أقدم من 10 أيام');
   openForm(e?'تعديل مصروف':'مصروف جديد',`<div class="grid2">
-    ${fld('التاريخ',`<input type="date" name="date" value="${v.date}" required>`)}
+    ${fld('التاريخ',`<input type="date" name="date" value="${v.date}" ${adm?'':`min="${dmin}" max="${today()}"`} required>`)}
     ${fld('النوع',`<select name="cat">${opts(DB.expenseCats,v.cat)}</select>`)}
     ${fld('المبلغ (ج.م)',`<input type="number" min="1" name="amount" value="${v.amount}" required>`)}
     ${fld('البيان / ملاحظات',`<input name="note" value="${esc(v.note)}">`)}
   </div>`,fd=>{
     if(!(+fd.amount>0)||!fd.date) return 'اكتب التاريخ والمبلغ';
+    if(!adm&&(fd.date<dmin||fd.date>today())) return 'التاريخ لازم يكون النهارده أو في آخر 10 أيام';
     const d={date:fd.date,cat:fd.cat,amount:+fd.amount,note:fd.note};
     if(e){const old=`${e.cat} ${fmt(e.amount)}`;Object.assign(e,d);commit('تعديل مصروف',`${old} ← ${d.cat} ${fmt(d.amount)} (${dshow(d.date)})`);toast('اتعدّل المصروف');return;}
     DB.expenses.push({id:uid(),...d,by:ME.name});commit('مصروف جديد',`${d.cat}: ${fmt(d.amount)} ج.م (${dshow(d.date)})`);toast('اتسجل المصروف');
   });
 }
-function delExp(id){const e=DB.expenses.find(x=>x.id===id);confirmBox(`مسح مصروف ${esc(e.cat)} بـ ${fmt(e.amount)} ج.م؟`,()=>{DB.expenses=DB.expenses.filter(x=>x.id!==id);commit('مسح مصروف',`${e.cat}: ${fmt(e.amount)} ج.م (${dshow(e.date)})`)})}
+function delExp(id){if(!can('expenses','delete')) return toast('مش مسموح لك تمسح مصاريف');const e=DB.expenses.find(x=>x.id===id);if(ME.roleId!=='admin'&&e.date<addDays(today(),-9)) return toast('مينفعش تمسح مصروف أقدم من 10 أيام');confirmBox(`مسح مصروف ${esc(e.cat)} بـ ${fmt(e.amount)} ج.م؟`,()=>{DB.expenses=DB.expenses.filter(x=>x.id!==id);commit('مسح مصروف',`${e.cat}: ${fmt(e.amount)} ج.م (${dshow(e.date)})`)})}
 
 /* ============ التقارير ============ */
-const REPORTS=[['mem','تقرير الأعضاء','rep_mem'],['daily','التقرير المالي اليومي','rep_daily'],['admin','تقارير الإدارة','rep_admin']];
+const REPORTS=[['mem','تقرير المشتركين','rep_mem'],['daily','التقرير المالي اليومي','rep_daily'],['exp','تقرير المصاريف','rep_exp'],['admin','تقارير الإدارة','rep_admin']];
 function vReports(){
   const avail=REPORTS.filter(r=>can(r[2]));
   if(!avail.some(r=>r[0]===F.rt)) F.rt=avail[0][0];
   let h=`<h1>التقارير</h1><div class="tabs">${avail.map(r=>`<button class="${F.rt===r[0]?'on':''}" onclick="F.rt='${r[0]}';render()">${r[1]}</button>`).join('')}</div>`;
   if(F.rt==='mem') h+=repMembers();
   else if(F.rt==='daily') h+=repDaily();
+  else if(F.rt==='exp') h+=repExpenses();
   else h+=repAdmin();
   return h;
 }
 function repMembers(){
-  const M=F.rm||thisMonth();
-  let h=`<div class="row between"><h2>تقرير الأعضاء — ${monthName(M)}</h2>${monthPicker(M,'rm')}</div>`;
+  const R=rangeUI('mf','mt'), A=R.a, B=R.b, inR=d=>d>=A&&d<=B;
+  let h=`<h2>تقرير المشتركين</h2>${R.html}`;
     const vm=visibleMembers(),ids=new Set(vm.map(m=>m.id)),t=today();
-    const att=DB.attendance.filter(a=>a.date.startsWith(M)&&ids.has(a.memberId));
+    const att=DB.attendance.filter(a=>inR(a.date)&&ids.has(a.memberId));
     const cnt={};att.forEach(a=>cnt[a.memberId]=(cnt[a.memberId]||0)+1);
-    const subsM=DB.subs.filter(s=>ids.has(s.memberId)&&s.start.startsWith(M));
+    const subsM=DB.subs.filter(s=>ids.has(s.memberId)&&inR(s.start));
     const cur=vm.map(m=>({m,s:currentSub(m.id)}));
     const active=cur.filter(x=>['active','ending'].includes(subStatus(x.s)));
     const ending=cur.filter(x=>subStatus(x.s)==='ending');
-    const expM=DB.subs.filter(s=>ids.has(s.memberId)&&s.end.startsWith(M)&&s.end<t);
+    const expM=DB.subs.filter(s=>ids.has(s.memberId)&&inR(s.end)&&s.end<t);
     const owe=vm.map(m=>({m,b:memberBalance(m.id)})).filter(x=>x.b>0).sort((a,b)=>b.b-a.b);
     const trC={};active.forEach(x=>{const k=trainerName(x.s.trainerId);trC[k]=(trC[k]||0)+1});
     h+=`<div class="stats">
-      <div class="stat good"><span>أعضاء اشتراكهم ساري</span><b>${active.length}</b><small>من ${vm.length}</small></div>
-      <div class="stat"><span>اشتراكات بدأت الشهر ده</span><b>${subsM.length}</b></div>
-      <div class="stat"><span>إجمالي زيارات الشهر</span><b>${att.length}</b></div>
-      <div class="stat bad"><span>اشتراكات خلصت الشهر ده</span><b>${expM.length}</b></div>
+      <div class="stat good"><span>مشتركين اشتراكهم ساري</span><b>${active.length}</b><small>من ${vm.length}</small></div>
+      <div class="stat"><span>اشتراكات بدأت في الفترة</span><b>${subsM.length}</b></div>
+      <div class="stat"><span>إجمالي الزيارات في الفترة</span><b>${att.length}</b></div>
+      <div class="stat bad"><span>اشتراكات خلصت في الفترة</span><b>${expM.length}</b></div>
     </div>
-    <div class="tblbox"><div class="row between"><h2>حضور الأعضاء خلال الشهر</h2>${copyBtn('rAtt')}</div>${table('rAtt',['#الكود','الاسم','الكابتن','بيتمرن','#أيام الحضور','#آخر حضور'],vm.filter(m=>cnt[m.id]).sort((a,b)=>cnt[b.id]-cnt[a.id]).map(m=>{const s=currentSub(m.id);const last=DB.attendance.filter(a=>a.memberId===m.id&&a.date.startsWith(M)).map(a=>a.date).sort().pop();return `<tr class="click" onclick="go('member','${m.id}')"><td class="num">${esc(m.code)}</td><td>${esc(m.name)}</td><td>${esc(s?trainerName(s.trainerId):'—')}</td><td>${esc(s?.activity||'—')}</td><td class="num">${cnt[m.id]}</td><td class="num">${dshow(last)}</td></tr>`}),{empty:'مفيش حضور في الشهر ده'})}</div>
+    <div class="tblbox"><div class="row between"><h2>حضور المشتركين خلال الفترة</h2>${copyBtn('rAtt')}</div>${table('rAtt',['#الكود','الاسم','الكابتن','بيتمرن','#أيام الحضور','#آخر حضور'],vm.filter(m=>cnt[m.id]).sort((a,b)=>cnt[b.id]-cnt[a.id]).map(m=>{const s=currentSub(m.id);const last=DB.attendance.filter(a=>a.memberId===m.id&&inR(a.date)).map(a=>a.date).sort().pop();return `<tr class="click" onclick="go('member','${m.id}')"><td class="num">${esc(m.code)}</td><td>${esc(m.name)}</td><td>${esc(s?trainerName(s.trainerId):'—')}</td><td>${esc(s?.activity||'—')}</td><td class="num">${cnt[m.id]}</td><td class="num">${dshow(last)}</td></tr>`}),{empty:'مفيش حضور في الفترة دي'})}</div>
     <div class="cards2">
       <div class="card"><div class="row between"><h2>بتخلص خلال 7 أيام</h2>${copyBtn('rEnd')}</div>${table('rEnd',['الاسم','الموبايل','#النهاية'],ending.sort((a,b)=>a.s.end.localeCompare(b.s.end)).map(x=>`<tr class="click" onclick="go('member','${x.m.id}')"><td>${esc(x.m.name)}</td><td class="num">${esc(x.m.phone)}</td><td class="num">${dshow(x.s.end)}</td></tr>`),{empty:'مفيش'})}</div>
-      <div class="card"><div class="row between"><h2>المشتركين حسب الكابتن</h2>${copyBtn('rTrc')}</div>${table('rTrc',['الكابتن','#أعضاء ساريين'],Object.entries(trC).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td>${esc(k)}</td><td class="num">${v}</td></tr>`),{empty:'مفيش'})}</div>
+      <div class="card"><div class="row between"><h2>المشتركين حسب الكابتن</h2>${copyBtn('rTrc')}</div>${table('rTrc',['الكابتن','#مشتركين ساريين'],Object.entries(trC).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td>${esc(k)}</td><td class="num">${v}</td></tr>`),{empty:'مفيش'})}</div>
     </div>
-    ${can('money')?`<div class="tblbox"><div class="row between"><h2>أعضاء عليهم فلوس</h2>${copyBtn('rOwe')}</div>${table('rOwe',['#الكود','الاسم','الموبايل','#الباقي'],owe.map(x=>`<tr class="click" onclick="go('member','${x.m.id}')"><td class="num">${esc(x.m.code)}</td><td>${esc(x.m.name)}</td><td class="num">${esc(x.m.phone)}</td><td class="num" style="color:var(--bad)">${fmt(x.b)}</td></tr>`),{empty:'مفيش حد عليه فلوس',foot:['الإجمالي','','',fmt(sum(owe.map(x=>x.b)))]})}</div>`:''}`;
+    ${can('money')?`<div class="tblbox"><div class="row between"><h2>مشتركين عليهم فلوس</h2>${copyBtn('rOwe')}</div>${table('rOwe',['#الكود','الاسم','الموبايل','#الباقي'],owe.map(x=>`<tr class="click" onclick="go('member','${x.m.id}')"><td class="num">${esc(x.m.code)}</td><td>${esc(x.m.name)}</td><td class="num">${esc(x.m.phone)}</td><td class="num" style="color:var(--bad)">${fmt(x.b)}</td></tr>`),{empty:'مفيش حد عليه فلوس',foot:['الإجمالي','','',fmt(sum(owe.map(x=>x.b)))]})}</div>`:''}`;
   return h;
 }
 function dayRange(){
@@ -861,7 +890,7 @@ function repDaily(){
   </div>
   <div class="kv">${METHODS.map(m=>`<div><span>دخل ${esc(m)}</span><b>${fmt(byM[m]||0)} ج.م</b></div>`).join('')}</div>
   ${one?'':`<div class="tblbox"><div class="row between"><h2>نهائي الدرج يوم بيوم</h2>${copyBtn('dDays')}</div><p class="muted" style="margin:0">كل يوم بيبدأ برصيد صفر.</p>${table('dDays',['#اليوم','#كاش','#إنستاباي','#المصاريف','#نهائي الدرج'],days.map(x=>`<tr><td class="num">${dshow(x.d)}</td><td class="num">${fmt(x.c)}</td><td class="num">${fmt(x.o)}</td><td class="num">${fmt(x.e)}</td><td class="num" style="color:${x.dr<0?'var(--bad)':'var(--ok)'}"><b>${fmt(x.dr)}</b></td></tr>`),{foot:['الإجمالي',fmt(cash),fmt(inc-cash),fmt(out),fmt(drawer)]})}</div>`}
-  <div class="tblbox"><div class="row between"><h2>اللي دخل</h2>${copyBtn('dIn')}</div>${table('dIn',['#التاريخ','#الكود','العضو','الاشتراك','الطريقة','#المبلغ','سجّلها'],pays.map(p=>{const m=memberById(p.memberId),sb=DB.subs.find(x=>x.id===p.subId);return `<tr class="click" onclick="go('member','${p.memberId}')"><td class="num">${dshow(p.date)}</td><td class="num">${esc(m?.code)}</td><td>${esc(m?.name||'—')}</td><td>${esc(sb?(sb.activity+' · '+sb.planName):'—')}</td><td>${esc(p.method)}</td><td class="num">${fmt(p.amount)}</td><td>${esc(p.by)}</td></tr>`}),{empty:'مفيش فلوس دخلت',foot:['الإجمالي','','','','',fmt(inc),'']})}</div>
+  <div class="tblbox"><div class="row between"><h2>اللي دخل</h2>${copyBtn('dIn')}</div>${table('dIn',['#التاريخ','#الكود','المشترك','الاشتراك','الطريقة','#المبلغ','سجّلها'],pays.map(p=>{const m=memberById(p.memberId),sb=DB.subs.find(x=>x.id===p.subId);return `<tr class="click" onclick="go('member','${p.memberId}')"><td class="num">${dshow(p.date)}</td><td class="num">${esc(m?.code)}</td><td>${esc(m?.name||'—')}</td><td>${esc(sb?(sb.activity+' · '+sb.planName):'—')}</td><td>${esc(p.method)}</td><td class="num">${fmt(p.amount)}</td><td>${esc(p.by)}</td></tr>`}),{empty:'مفيش فلوس دخلت',foot:['الإجمالي','','','','',fmt(inc),'']})}</div>
   <div class="tblbox"><div class="row between"><h2>اللي خرج</h2>${copyBtn('dOut')}</div>${table('dOut',['#التاريخ','النوع','البيان','#المبلغ','سجّله'],exps.map(e=>`<tr><td class="num">${dshow(e.date)}</td><td>${esc(e.cat)}</td><td>${esc(e.note)}</td><td class="num">${fmt(e.amount)}</td><td>${esc(e.by)}</td></tr>`),{empty:'مفيش مصاريف',foot:['الإجمالي','','',fmt(out),'']})}</div>`;
 }
 function rangeUI(kf,kt){
@@ -890,7 +919,7 @@ function repAdmin(){
   const kv=(o,id,h1,tot)=>table(id,[h1,'#المبلغ'],Object.entries(o).sort((x,y)=>y[1]-x[1]).map(([k,v])=>`<tr><td>${esc(k)}</td><td class="num">${fmt(v)}</td></tr>`),{empty:'مفيش',foot:['الإجمالي',fmt(tot)]});
   return `<div class="card" style="background:var(--accent-soft);border-color:var(--accent-soft)"><div class="row between"><h2>الإجمالي من أول ما بدأنا</h2><span class="muted" style="font-size:13px">بيتحسب لوحده — مش بيتأثر بالتاريخ</span></div>
     <div class="stats">${[['إجمالي اللي دخل',allIn],['إجمالي المصاريف',allOut],['إجمالي جاري الشركاء',allW],['صافي المتبقي معايا',allNet]].map(([l,v],i)=>`<div class="stat ${i===3?(v<0?'bad':'good'):''}"><span>${l}</span><b>${fmt(v)}</b><small>ج.م</small></div>`).join('')}</div></div>
-  <div class="row between"><h2>حسب الفترة</h2><div class="row">${can('adjust','add')?`<button class="btn" onclick="adjForm(null,'in')">+ إيراد إداري</button><button class="btn" onclick="adjForm(null,'out')">+ مصروف إداري</button>`:''}${can('partners','add')?`<button class="btn primary" onclick="wdForm()">+ تسجيل مسحوبات شريك</button>`:''}</div></div>
+  <div class="row between"><h2>حسب الفترة</h2><div class="row">${can('adjust','add')?`<button class="btn" onclick="adjForm(null,'in')">+ إيراد إداري</button><button class="btn" onclick="adjForm(null,'out')">+ مصروف إداري</button>`:''}</div></div>
   ${R.html}
   <div class="stats">
     <div class="stat good"><span>الإيراد</span><b>${fmt(inc)}</b><small>${aIn?`اشتراكات ${fmt(payIn)} + إداري ${fmt(aIn)}`:pays.length+' دفعة · ج.م'}</small></div>
@@ -985,16 +1014,16 @@ function vSettings(){
   return `<h1>الإعدادات</h1>
   <div class="card"><h2>اسم الجيم</h2>${ed?`<form class="row" onsubmit="event.preventDefault();setGym(this.v.value)"><input class="in" name="v" style="max-width:300px" value="${esc(DB.settings.gymName)}"><button class="btn sm">حفظ</button></form>`:`<p>${esc(DB.settings.gymName)}</p>`}</div>
   <div class="card"><div class="row between"><h2>الباقات والأسعار</h2>${ed?`<button class="btn sm primary" onclick="planForm()">+ باقة</button>`:''}</div>
-    <p class="muted" style="margin:0">كل باقة ليها نوع تمرين وسعرها الخاص. الباقة اللي نوعها "كل الأنواع" بتظهر مع أي تمرين.</p>${table('tPlans',['نوع التمرين','الباقة','المدة','#الحصص','#السعر',''],DB.plans.slice().sort((a,b)=>(a.activity||'ي').localeCompare(b.activity||'ي')||(a.unit===b.unit?0:a.unit==='d'?-1:1)||a.len-b.len).map(p=>`<tr><td>${p.activity?`<span class="chip acc">${esc(p.activity)}</span>`:'<span class="chip">كل الأنواع</span>'}</td><td>${esc(p.name)}</td><td>${p.len} ${p.unit==='d'?'يوم':'شهر'}</td><td class="num">${+p.sessions>0?p.sessions+' حصة':'مفتوح'}</td><td class="num">${can('money')?fmt(p.price):'••••'}</td><td>${ed?`<button class="btn sm" onclick="planForm('${p.id}')">تعديل</button> <button class="btn sm danger" onclick="delPlan('${p.id}')">مسح</button>`:''}</td></tr>`),{copy:false})}</div>
+    <p class="muted" style="margin:0">كل باقة ليها نوع تمرين وسعرها الخاص. الباقة اللي نوعها "كل الأنواع" بتظهر مع أي تمرين.</p>${table('tPlans',['نوع التمرين','المدة','#الحصص','#السعر',''],DB.plans.slice().sort((a,b)=>(a.activity||'ي').localeCompare(b.activity||'ي')||(a.unit===b.unit?0:a.unit==='d'?-1:1)||a.len-b.len).map(p=>`<tr><td>${p.activity?`<span class="chip acc">${esc(p.activity)}</span>`:'<span class="chip">كل الأنواع</span>'}</td><td>${durTxt(p.len,p.unit)}</td><td class="num">${+p.sessions>0?p.sessions+' حصة':'مفتوح'}</td><td class="num">${can('money')?fmt(p.price):'••••'}</td><td>${ed?`<button class="btn sm" onclick="planForm('${p.id}')">تعديل</button> <button class="btn sm danger" onclick="delPlan('${p.id}')">مسح</button>`:''}</td></tr>`),{copy:false})}</div>
   <div class="card"><div class="row between"><h2>الكباتن</h2>${ed?`<button class="btn sm primary" onclick="trainerForm()">+ كابتن</button>`:''}</div>
-    ${table('tTr',['الاسم','الموبايل','الحالة','#أعضاء ساريين',''],DB.trainers.map(tr=>{const n=DB.members.filter(m=>{const s=currentSub(m.id);return s&&s.trainerId===tr.id&&['active','ending'].includes(subStatus(s))}).length;return `<tr><td>${esc(tr.name)}</td><td class="num">${esc(tr.phone)}</td><td>${tr.active?'<span class="chip ok">شغال</span>':'<span class="chip">موقوف</span>'}</td><td class="num">${n}</td><td>${ed?`<button class="btn sm" onclick="trainerForm('${tr.id}')">تعديل</button> <button class="btn sm danger" onclick="delTrainer('${tr.id}')">مسح</button>`:''}</td></tr>`}))}</div>
+    ${table('tTr',['الاسم','الموبايل','الحالة','#مشتركين ساريين',''],DB.trainers.map(tr=>{const n=DB.members.filter(m=>{const s=currentSub(m.id);return s&&s.trainerId===tr.id&&['active','ending'].includes(subStatus(s))}).length;return `<tr><td>${esc(tr.name)}</td><td class="num">${esc(tr.phone)}</td><td>${tr.active?'<span class="chip ok">شغال</span>':'<span class="chip">موقوف</span>'}</td><td class="num">${n}</td><td>${ed?`<button class="btn sm" onclick="trainerForm('${tr.id}')">تعديل</button> <button class="btn sm danger" onclick="delTrainer('${tr.id}')">مسح</button>`:''}</td></tr>`}))}</div>
   <div class="cards2">
     <div class="card"><h2>الأنشطة (بيتمرن إيه)</h2>${chips(DB.activities,'activities')}</div>
     <div class="card"><h2>أنواع المصاريف</h2>${chips(DB.expenseCats,'expenseCats')}</div>
   </div>
   ${ME.roleId==='admin'?`<div class="card"><h2>أدوات الأدمن</h2>
     <div class="cards2">
-      <div class="card" style="background:var(--bg)"><h3>استيراد الأعضاء من Excel</h3><p class="muted" style="margin:0">لأول مرة بس: نزّل النموذج، املاه ببيانات اللعيبة، وارفعه. هيتعمل لكل لاعب ملفه واشتراكه والمدفوع والمتبقي.</p>
+      <div class="card" style="background:var(--bg)"><h3>استيراد المشتركين من Excel</h3><p class="muted" style="margin:0">لأول مرة بس: نزّل النموذج، املاه ببيانات اللعيبة، وارفعه. هيتعمل لكل لاعب ملفه واشتراكه والمدفوع والمتبقي.</p>
         <div class="row"><button class="btn" onclick="xlTemplate()">تحميل نموذج Excel</button><label class="btn primary" for="xlFile">رفع ملف Excel</label><input type="file" id="xlFile" accept=".xlsx,.xls,.csv" hidden onchange="xlRead(this)"></div></div>
       <div class="card" style="background:var(--bg)"><h3>النسخة الاحتياطية</h3><p class="muted" style="margin:0">نزّل ملف فيه كل بيانات السيستم واحفظه عندك (يُفضّل كل أسبوع). ولو حصلت مشكلة ترجّع منه.</p>
         <div class="row"><button class="btn primary" onclick="downloadBackup()">تحميل نسخة احتياطية</button><label class="btn" for="bkFile">استرجاع من ملف</label><input type="file" id="bkFile" accept=".json,.txt" hidden onchange="restoreFile(this)">${DB.demo?`<button class="btn danger" onclick="clearDemo()">مسح بيانات الأمثلة</button>`:''}</div>
@@ -1006,9 +1035,8 @@ function addItem(key,v){v=(v||'').trim();if(!v) return;if(DB[key].includes(v)) r
 function delItem(key,i){const v=DB[key][i];confirmBox(`مسح "${esc(v)}" من القائمة؟ البيانات القديمة اللي عليه هتفضل زي ما هي.`,()=>{DB[key].splice(i,1);commit('تعديل الإعدادات',`مسح "${v}"`)})}
 function planForm(id){
   const p=id?DB.plans.find(x=>x.id===id):null,v=p||{name:'',activity:'',len:1,unit:'m',sessions:0,price:''};
-  openForm(p?'تعديل باقة':'باقة جديدة',`<div class="grid2">${fld('نوع التمرين',`<select name="activity"><option value="">كل الأنواع</option>${opts(DB.activities,v.activity||'')}</select>`)}${fld('اسم الباقة',`<input name="name" value="${esc(v.name)}" required>`)}${fld('المدة',`<div class="pair"><input type="number" min="1" name="len" value="${v.len}"><select name="unit">${opts([['m','شهر'],['d','يوم']],v.unit,0,1)}</select></div>`)}${fld('عدد الحصص (0 = مفتوح)',`<input type="number" min="0" name="sessions" value="${+v.sessions||0}">`)}${fld('السعر (ج.م)',`<input type="number" min="0" name="price" value="${v.price}" required>`)}</div><p class="muted" style="margin:0">لو حددت عدد حصص، الاشتراك بيخلص لما يخلص الحصص أو المدة، أيهما أقرب.</p>`,fd=>{
-    if(!fd.name.trim()) return 'اكتب اسم الباقة';
-    const d={name:fd.name.trim(),activity:fd.activity||'',len:+fd.len||1,unit:fd.unit,sessions:Math.max(0,+fd.sessions||0),price:+fd.price||0};
+  openForm(p?'تعديل باقة':'باقة جديدة',`<div class="grid2">${fld('نوع التمرين',`<select name="activity"><option value="">كل الأنواع</option>${opts(DB.activities,v.activity||'')}</select>`)}${fld('المدة',`<div class="pair"><input type="number" min="1" name="len" value="${v.len}"><select name="unit">${opts([['m','شهر'],['d','يوم']],v.unit,0,1)}</select></div>`)}${fld('عدد الحصص (0 = مفتوح)',`<input type="number" min="0" name="sessions" value="${+v.sessions||0}">`)}${fld('السعر (ج.م)',`<input type="number" min="0" name="price" value="${v.price}" required>`)}</div><p class="muted" style="margin:0">لو حددت عدد حصص، الاشتراك بيخلص لما يخلص الحصص أو المدة، أيهما أقرب.</p>`,fd=>{
+    const d={name:planLabel({len:+fd.len||1,unit:fd.unit,sessions:+fd.sessions||0}),activity:fd.activity||'',len:+fd.len||1,unit:fd.unit,sessions:Math.max(0,+fd.sessions||0),price:+fd.price||0};
     if(p){Object.assign(p,d);commit('تعديل باقة',`${d.activity||'كل الأنواع'} — ${d.name}: ${fmt(d.price)} ج.م`)}else{DB.plans.push({id:uid(),...d});commit('باقة جديدة',`${d.activity||'كل الأنواع'} — ${d.name}: ${fmt(d.price)} ج.م`)}
   });
 }
@@ -1034,7 +1062,7 @@ function importData(){
     if(!d||!Array.isArray(d.members)||!Array.isArray(d.roles)) return 'النص ده مش نسخة احتياطية صحيحة';
     const users=DB.users; DB=Object.assign(emptyDB(),d); DB.users=users; migrate();
     if(!DB.roles.some(r=>r.id==='admin')) return 'النسخة دي ناقصها دور الأدمن';
-    commit('استرجاع نسخة',`استرجاع بيانات: ${DB.members.length} عضو`);toast('اتسترجعت النسخة — المستخدمين زي ما هما');
+    commit('استرجاع نسخة',`استرجاع بيانات: ${DB.members.length} مشترك`);toast('اتسترجعت النسخة — المستخدمين زي ما هما');
   },'استرجاع');
 }
 function backupText(){return JSON.stringify(Object.assign({},DB,{users:(DB.users||[]).map(u=>({id:u.id,name:u.name,username:u.username,roleId:u.roleId,trainerId:u.trainerId||'',active:u.active}))}))}
@@ -1050,13 +1078,13 @@ function restoreFile(inp){
 /* ---- استيراد Excel ---- */
 function loadXLSX(){return new Promise((res,rej)=>{if(window.XLSX) return res(window.XLSX);const sc=document.createElement('script');sc.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';sc.onload=()=>res(window.XLSX);sc.onerror=()=>rej(new Error('x'));document.head.appendChild(sc)})}
 const XL_COLS=[['code','الكود'],['name','الاسم'],['phone','الموبايل'],['activity','نوع التمرين'],['trainer','الكابتن'],['start','تاريخ البداية'],['months','المدة بالشهور'],['end','تاريخ النهاية'],['sessions','عدد الحصص'],['sleft','الحصص الباقية'],['paid','المدفوع'],['left','المتبقي'],['notes','ملاحظات']];
-const XL_ALIAS={code:['الكود','كود','كودالعميل','code'],name:['الاسم','اسم','اسماللاعب','اسماللعيب','الاسمبالكامل','name'],phone:['الموبايل','موبايل','الهاتف','هاتف','التليفون','رقمالموبايل','رقمالهاتف','phone','mobile'],activity:['نوعالتمرين','نوعالاشتراك','النشاط','بيتمرن','بيتمرنايه','activity'],trainer:['الكابتن','كابتن','المدرب','اسمالكابتن','trainer'],start:['تاريخالبداية','البداية','بدايةالاشتراك','start'],months:['المدةبالشهور','المدة','شهور','عددالشهور','months'],end:['تاريخالنهاية','النهاية','نهايةالاشتراك','end'],paid:['المدفوع','مدفوع','paid'],left:['المتبقي','الباقي','متبقي','الباقيعليه','remaining'],total:['قيمةالاشتراك','القيمة','الإجمالي','الاجمالي','total'],sessions:['عددالحصص','الحصص','اجماليالحصص','sessions'],sleft:['الحصصالباقيه','الحصصالمتبقيه','باقيحصص','حصصباقيه','الحصصالباقية'],notes:['ملاحظات','notes']};
+const XL_ALIAS={code:['الكود','كود','كودالعميل','كودالمشترك','code'],name:['الاسم','اسم','اسماللاعب','اسماللعيب','اسمالمشترك','الاسمبالكامل','name'],phone:['الموبايل','موبايل','الهاتف','هاتف','التليفون','رقمالموبايل','رقمالهاتف','phone','mobile'],activity:['نوعالتمرين','نوعالاشتراك','النشاط','بيتمرن','بيتمرنايه','activity'],trainer:['الكابتن','كابتن','المدرب','اسمالكابتن','trainer'],start:['تاريخالبداية','البداية','بدايةالاشتراك','start'],months:['المدةبالشهور','المدة','شهور','عددالشهور','months'],end:['تاريخالنهاية','النهاية','نهايةالاشتراك','end'],paid:['المدفوع','مدفوع','paid'],left:['المتبقي','الباقي','متبقي','الباقيعليه','remaining'],total:['قيمةالاشتراك','القيمة','الإجمالي','الاجمالي','total'],sessions:['عددالحصص','الحصص','اجماليالحصص','sessions'],sleft:['الحصصالباقيه','الحصصالمتبقيه','باقيحصص','حصصباقيه','الحصصالباقية'],notes:['ملاحظات','notes']};
 const xlNorm=t=>String(t??'').replace(/[\s_\-()]/g,'').replace(/[أإآ]/g,'ا').replace(/ة$/,'ه').toLowerCase();
 async function xlTemplate(){
   let X;try{X=await loadXLSX()}catch(e){return toast('مش قادر أحمّل أداة Excel — اتأكد من النت')}
   const ws=X.utils.aoa_to_sheet([XL_COLS.map(c=>c[1]),['','محمد أحمد','01012345678','حديد','',dshow(today()),1,'',12,8,400,200,'مثال — امسح السطر ده']]);
   ws['!cols']=XL_COLS.map(()=>({wch:16}));
-  const wb=X.utils.book_new();wb.Workbook={Views:[{RTL:true}]};X.utils.book_append_sheet(wb,ws,'الأعضاء');
+  const wb=X.utils.book_new();wb.Workbook={Views:[{RTL:true}]};X.utils.book_append_sheet(wb,ws,'المشتركين');
   X.writeFile(wb,'keepfit-members-template.xlsx');
 }
 function xlDate(v,X){
@@ -1106,7 +1134,7 @@ async function xlRead(inp){
   const ok=XL_ROWS.filter(o=>!o.errs.length),bad=XL_ROWS.length-ok.length;
   openModal('مراجعة ملف Excel',`<div class="stats"><div class="stat good"><span>جاهزين للاستيراد</span><b>${ok.length}</b></div><div class="stat ${bad?'bad':''}"><span>فيهم مشكلة (مش هيتسجلوا)</span><b>${bad}</b></div><div class="stat"><span>إجمالي المتبقي</span><b>${fmt(sum(ok.map(o=>o.left)))}</b><small>ج.م</small></div></div>
     <div class="tbl" style="max-height:50vh;overflow:auto">${'<table><thead><tr><th class="num">السطر</th><th>الاسم</th><th>الموبايل</th><th>التمرين</th><th>من</th><th>إلى</th><th class="num">الحصص</th><th class="num">المدفوع</th><th class="num">المتبقي</th><th>الحالة</th></tr></thead><tbody>'+XL_ROWS.slice(0,500).map(o=>`<tr><td class="num">${o.line}</td><td>${esc(o.name)}</td><td class="num">${esc(o.phone)}</td><td>${esc(o.activity||'—')}</td><td class="num">${o.hasSub?dshow(o.start):'—'}</td><td class="num">${o.hasSub?dshow(o.end):'—'}</td><td class="num">${o.ses>0?(o.ses-o.usedBefore)+' من '+o.ses:'مفتوح'}</td><td class="num">${fmt(o.paid)}</td><td class="num">${fmt(o.left)}</td><td>${o.errs.length?`<span class="chip bad">${esc(o.errs.join('، '))}</span>`:'<span class="chip ok">تمام</span>'}</td></tr>`).join('')+'</tbody></table>'}</div>
-    <div class="form-end">${ok.length?`<button class="btn primary" onclick="xlImport()">استيراد ${ok.length} عضو</button>`:''}<button class="btn ghost" onclick="closeModal()">إلغاء</button></div>`);
+    <div class="form-end">${ok.length?`<button class="btn primary" onclick="xlImport()">استيراد ${ok.length} مشترك</button>`:''}<button class="btn ghost" onclick="closeModal()">إلغاء</button></div>`);
 }
 function xlImport(){
   const ok=XL_ROWS.filter(o=>!o.errs.length);if(!ok.length) return;
@@ -1120,10 +1148,10 @@ function xlImport(){
       if(o.paid>0) DB.payments.push({id:uid(),memberId:mid,subId:sid,amount:o.paid,date:o.start,method:'كاش',note:'رصيد افتتاحي (Excel)',opening:true,by:ME.name});
     }
   });
-  closeModal();commit('استيراد Excel',`${ok.length} عضو`);toast(`اتسجل ${ok.length} عضو من ملف Excel`);
+  closeModal();commit('استيراد Excel',`${ok.length} مشترك`);toast(`اتسجل ${ok.length} مشترك من ملف Excel`);
 }
 function clearDemo(){
-  confirmBox('هيتمسح كل الأعضاء والاشتراكات والدفعات والحضور والمصاريف وسجل الحركات بتاعة الأمثلة. الإعدادات والمستخدمين والصلاحيات هتفضل. متأكد؟',()=>{
+  confirmBox('هيتمسح كل المشتركين والاشتراكات والدفعات والحضور والمصاريف وسجل الحركات بتاعة الأمثلة. الإعدادات والمستخدمين والصلاحيات هتفضل. متأكد؟',()=>{
     Object.assign(DB,{members:[],subs:[],payments:[],attendance:[],expenses:[],audit:[],demo:false});DB.settings.nextCode=1001;
     commit('بداية جديدة','مسح بيانات الأمثلة');toast('السيستم جاهز لبياناتك الحقيقية');
   },'أيوه، ابدأ على نضافة');
@@ -1142,10 +1170,11 @@ function vUsers(){
     <p class="muted" style="margin:0">اختار الدور وعلّم على اللي مسموح له. التغيير بيتحفظ على طول وبيتطبق على كل المستخدمين اللي على الدور ده.</p>
     <div class="tabs">${DB.roles.map(x=>`<button class="${x.id===F.role?'on':''}" onclick="F.role='${x.id}';render()">${esc(x.name)} <span class="muted">(${DB.users.filter(u=>u.roleId===x.id).length})</span></button>`).join('')}</div>
     ${r.locked?`<div class="banner info">دور الأدمن عنده كل الصلاحيات ومينفعش يتقفل عشان متتقفلش برّه السيستم.</div>`:''}
-    <div class="tbl"><table class="matrix"><thead><tr><th>الشاشة</th>${Object.values(ACTS).map(a=>`<th>${a}</th>`).join('')}</tr></thead><tbody>
+    <div class="tbl"><table class="matrix"><thead><tr><th>الشاشة</th>${Object.entries(ACTS).map(([k,a])=>`<th${k==='delete'?' style="color:var(--bad)"':''}>${a}</th>`).join('')}</tr></thead><tbody>
+    <tr><td colspan="5" class="muted" style="white-space:normal;text-align:start;font-size:13px">عمود <b style="color:var(--bad)">يمسح</b>: محدش يقدر يمسح أي حاجة غير لو علّمت له هنا. ومسح مشترك عليه دفعات محتاج كمان صلاحية مسح <b>الدفعات</b>.</td></tr>
     ${MODULES.map(m=>`<tr><td>${m.name}</td>${Object.keys(ACTS).map(a=>m.acts.includes(a)?`<td><input type="checkbox" aria-label="${m.name} - ${ACTS[a]}" ${r.locked||(r.perms[m.key]||[]).includes(a)?'checked':''} ${locked?'disabled':''} onchange="setPerm('${r.id}','${m.key}','${a}',this.checked)"></td>`:'<td class="muted">—</td>').join('')}</tr>`).join('')}
     </tbody></table></div>
-    ${!r.locked?`<label class="check"><input type="checkbox" ${r.ownOnly?'checked':''} ${locked?'disabled':''} onchange="setOwnOnly('${r.id}',this.checked)"> يشوف بس الأعضاء اللي بيدربهم (لازم المستخدم يكون مرتبط بكابتن)</label>`:''}
+    ${!r.locked?`<label class="check"><input type="checkbox" ${r.ownOnly?'checked':''} ${locked?'disabled':''} onchange="setOwnOnly('${r.id}',this.checked)"> يشوف بس المشتركين اللي بيدربهم (لازم المستخدم يكون مرتبط بكابتن)</label>`:''}
     ${ed&&!r.locked?`<div class="row"><button class="btn sm" onclick="roleForm('${r.id}')">تغيير اسم الدور</button><button class="btn sm danger" onclick="delRole('${r.id}')">مسح الدور</button></div>`:''}
   </div>`;
 }
@@ -1156,7 +1185,7 @@ function setPerm(rid,mod,act,on){
   r.perms[mod]=[...p];
   commit('تعديل صلاحيات',`${r.name}: ${MODULES.find(m=>m.key===mod).name} — ${ACTS[act]} ${on?'✓':'✗'}`);
 }
-function setOwnOnly(rid,on){const r=DB.roles.find(x=>x.id===rid);r.ownOnly=on;commit('تعديل صلاحيات',`${r.name}: يشوف أعضاءه بس ${on?'✓':'✗'}`)}
+function setOwnOnly(rid,on){const r=DB.roles.find(x=>x.id===rid);r.ownOnly=on;commit('تعديل صلاحيات',`${r.name}: يشوف مشتركينه بس ${on?'✓':'✗'}`)}
 function roleForm(id){
   const r=id?DB.roles.find(x=>x.id===id):null;
   openForm(r?'تغيير اسم الدور':'دور جديد',`<div class="grid2">${fld('اسم الدور',`<input name="name" value="${esc(r?.name||'')}" required placeholder="مثال: ريسبشن">`)}${r?'':fld('ابدأ بصلاحيات',`<select name="copy"><option value="">من غير صلاحيات</option>${opts(DB.roles.filter(x=>!x.locked),'','id','name')}</select>`)}</div>`,fd=>{
@@ -1208,7 +1237,7 @@ function delUser(id){const u=DB.users.find(x=>x.id===id);if(u.roleId==='admin'&&
 function vAudit(){
   const users=[...new Set(DB.audit.map(a=>a.user))];
   return `<h1>سجل الحركات</h1><p class="muted" style="margin:0">كل إضافة أو تعديل أو مسح بيتسجل هنا باسم اللي عمله ووقته، ومحدش يقدر يعدّل فيه.</p>
-  <div class="row"><input id="aq" class="in" style="max-width:300px" placeholder="ابحث: مسح، دفعة، اسم عضو، مبلغ..." value="${esc(F.aq)}" oninput="F.aq=this.value;drawAudit()" aria-label="بحث في التفاصيل">
+  <div class="row"><input id="aq" class="in" style="max-width:300px" placeholder="ابحث: مسح، دفعة، اسم مشترك، مبلغ..." value="${esc(F.aq)}" oninput="F.aq=this.value;drawAudit()" aria-label="بحث في التفاصيل">
   <select class="in" style="max-width:220px" onchange="F.au=this.value;drawAudit()" aria-label="المستخدم"><option value="">كل المستخدمين</option>${opts(users,F.au)}</select><span class="spacer"></span>${copyBtn('tAud')}</div>
   <div id="at"></div>`;
 }
